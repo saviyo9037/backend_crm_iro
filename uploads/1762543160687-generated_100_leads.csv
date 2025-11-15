@@ -1,0 +1,101 @@
+Name,Mobile,Source,Location,Interestedproducts,Leadvalue
+Person 1,9189039631,LinkedIn,Bangalore,BBA,12687
+Person 2,9428374565,Naukri,Thrissur,MBA,48281
+Person 3,9977987442,LinkedIn,Delhi,AI & ML,21645
+Person 4,9667510180,LinkedIn,Chennai,Web Development,34446
+Person 5,9296368753,Referral,Kochi,BBA,44687
+Person 6,9198673790,LinkedIn,Bangalore,Data Science,15077
+Person 7,9226443808,Naukri,Bangalore,BCA,23918
+Person 8,9354749818,LinkedIn,Chennai,AI & ML,16695
+Person 9,9473316627,LinkedIn,Chennai,Web Development,35289
+Person 10,9787832047,Website,Delhi,AI & ML,34192
+Person 11,9685208919,Naukri,Kochi,MBA,24084
+Person 12,9302460453,Naukri,Delhi,MCA,24887
+Person 13,9825739095,Referral,Bangalore,AI & ML,43718
+Person 14,9888767017,LinkedIn,Kochi,BCA,47157
+Person 15,9469422039,Naukri,Kochi,AI & ML,49989
+Person 16,9632928696,Website,Thrissur,MBA,42626
+Person 17,9602793093,Referral,Chennai,MCA,36902
+Person 18,9895262018,Referral,Delhi,MCA,20860
+Person 19,9511685052,Naukri,Kochi,Web Development,26607
+Person 20,9176248963,Referral,Bangalore,MBA,31714
+Person 21,9986114219,Referral,Chennai,MCA,36051
+Person 22,9427193443,Referral,Kochi,Data Science,44529
+Person 23,9724233245,Website,Thrissur,MBA,32725
+Person 24,9975157017,Referral,Thrissur,Data Science,15400
+Person 25,9390521423,Website,Thrissur,BBA,32048
+Person 26,9516011634,Referral,Kochi,MCA,38269
+Person 27,9896745887,Naukri,Delhi,BCA,23765
+Person 28,9271461224,LinkedIn,Delhi,MBA,17954
+Person 29,9843993748,Referral,Chennai,AI & ML,15393
+Person 30,9870664635,LinkedIn,Chennai,BCA,49345
+Person 31,9209175329,Referral,Kochi,AI & ML,45696
+Person 32,9238510025,Website,Bangalore,Web Development,45817
+Person 33,9447814767,Referral,Delhi,BBA,48177
+Person 34,9367772916,Website,Thrissur,Data Science,28971
+Person 35,9792323998,Referral,Kochi,MBA,14229
+Person 36,9693748763,Naukri,Bangalore,AI & ML,10898
+Person 37,9587803949,Website,Kochi,BBA,11704
+Person 38,9780116606,LinkedIn,Chennai,Data Science,44135
+Person 39,9572878817,LinkedIn,Bangalore,MBA,34630
+Person 40,9767163307,LinkedIn,Mumbai,AI & ML,16887
+Person 41,9118699572,Naukri,Chennai,MBA,10596
+Person 42,9445973363,Naukri,Delhi,BCA,18141
+Person 43,9272998847,Referral,Chennai,MCA,15758
+Person 44,9620150230,Referral,Chennai,MCA,10952
+Person 45,9175282154,Website,Chennai,Data Science,35846
+Person 46,9186605539,Referral,Chennai,MCA,42854
+Person 47,9560825474,LinkedIn,Mumbai,MBA,11213
+Person 48,9300848798,Naukri,Bangalore,MCA,49040
+Person 49,9342873364,LinkedIn,Mumbai,AI & ML,47315
+Person 50,9863055682,LinkedIn,Chennai,MBA,19974
+Person 51,9632396173,Website,Kochi,MCA,30506
+Person 52,9613458391,Website,Mumbai,Data Science,46017
+Person 53,9109216334,LinkedIn,Mumbai,Data Science,32398
+Person 54,9513112507,Website,Bangalore,AI & ML,21215
+Person 55,9459400814,Referral,Chennai,MBA,30046
+Person 56,9228963865,Referral,Chennai,BBA,23473
+Person 57,9580456817,LinkedIn,Mumbai,BBA,31910
+Person 58,9493118358,Referral,Mumbai,BCA,40985
+Person 59,9195909491,Naukri,Bangalore,MCA,32812
+Person 60,9439439492,Naukri,Mumbai,Web Development,33314
+Person 61,9396091651,LinkedIn,Chennai,BBA,41986
+Person 62,9205211046,LinkedIn,Kochi,Data Science,41630
+Person 63,9708155690,Website,Mumbai,MBA,16542
+Person 64,9767207421,Referral,Kochi,Web Development,11818
+Person 65,9623932440,Referral,Kochi,AI & ML,46996
+Person 66,9448226730,LinkedIn,Mumbai,MCA,44179
+Person 67,9886388525,Referral,Thrissur,BBA,21713
+Person 68,9109921632,Referral,Thrissur,BCA,43552
+Person 69,9131882840,Referral,Bangalore,MBA,20600
+Person 70,9485963854,Naukri,Thrissur,Data Science,28631
+Person 71,9627895523,Naukri,Delhi,MBA,45572
+Person 72,9360536163,LinkedIn,Mumbai,MCA,36605
+Person 73,9856719326,Naukri,Bangalore,Web Development,48319
+Person 74,9534748081,Referral,Bangalore,BBA,25154
+Person 75,9862218397,Naukri,Chennai,BCA,18368
+Person 76,9971077829,Referral,Delhi,Data Science,18427
+Person 77,9255287967,LinkedIn,Mumbai,Web Development,27415
+Person 78,9821258675,Naukri,Mumbai,BBA,48560
+Person 79,9978854160,LinkedIn,Kochi,AI & ML,36931
+Person 80,9403032501,Naukri,Mumbai,AI & ML,47661
+Person 81,9688136672,LinkedIn,Kochi,Data Science,37013
+Person 82,9825699540,LinkedIn,Kochi,MBA,22889
+Person 83,9261422007,LinkedIn,Chennai,BCA,27535
+Person 84,9237588486,Naukri,Chennai,MCA,19212
+Person 85,9554565169,LinkedIn,Mumbai,AI & ML,22090
+Person 86,9994416340,Naukri,Kochi,Data Science,46080
+Person 87,9865975722,Naukri,Chennai,MCA,48686
+Person 88,9863243154,LinkedIn,Chennai,BBA,49521
+Person 89,9660779217,LinkedIn,Thrissur,MBA,17975
+Person 90,9759544253,Referral,Bangalore,Web Development,12308
+Person 91,9573868391,Website,Kochi,BCA,39554
+Person 92,9142741215,Website,Kochi,Data Science,32543
+Person 93,9740083169,Referral,Delhi,MCA,23362
+Person 94,9457143256,Website,Thrissur,AI & ML,30281
+Person 95,9449504475,Website,Bangalore,AI & ML,21710
+Person 96,9913723018,Referral,Mumbai,AI & ML,43516
+Person 97,9822057138,Referral,Delhi,MBA,24345
+Person 98,9270853016,Naukri,Chennai,BBA,24263
+Person 99,9359285935,LinkedIn,Mumbai,MBA,43942
+Person 100,9582732299,LinkedIn,Bangalore,AI & ML,27668

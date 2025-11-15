@@ -193,14 +193,33 @@ const paymentstatusController = {
 
     const userIds = req.user.assignedLeads.map((item) => item.toString());
     const customers = await Payment.find({}).populate("customer").lean();
-    const payments =
-      req.user.role === "Admin"
-        ? customers
-        : customers.filter((item) =>
-            userIds.includes(item.customer?.leadId?.toString())
-          );
+    // const payments =
+    //   req.user.role === "Admin"  
+    //     ? customers
+    //     : customers.filter((item) =>
+    //         userIds.includes(item.customer?.leadId?.toString())
+    //       );
+
+  //   const visibleCustomers =
+  // ["Admin", "Sub-Admin"].includes(req.user.role)
+  //   ? customers
+  //   : req.user.role === "Agent"
+  //   ? customers.filter((item) =>
+  //       userIds.includes(item.customer?.leadId?.toString())
+  //     )
+    // : []; // for any other roles, show nothing (optional)
+
+const payments =
+   ["Admin", "Sub-Admin"].includes(req.user.role)
+  ? customers
+   : req.user.role === "Agent"
+  ? customers.filter((item) =>
+      item.customer?.createdBy?.toString() === req.user._id.toString()
+    )
+    : [];
+
     if (!payments || payments.length === 0) {
-      return res.status(404).json({ message: "No payment records found" });
+      return res.status(200).json({ message: "No payment records found", data: [] });
     }
 
     res.status(200).json({
@@ -300,3 +319,6 @@ const paymentstatusController = {
 };
 
 module.exports = paymentstatusController;
+
+
+// saviyo.................

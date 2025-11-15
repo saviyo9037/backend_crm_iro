@@ -18,6 +18,7 @@ const customersController = {
       product,
       description,
       address,
+      leadId, // Add leadId to destructuring
     } = req.body;
     const userId = req.user?.id;
 
@@ -39,6 +40,17 @@ const customersController = {
       type: "customer-status",
     });
 
+    let assignedAgentId = userId; // Default to the creator's ID
+
+    if (leadId) {
+      const lead = await User.findById(leadId); // Assuming Lead is a User model
+      if (lead && lead.assignedTo) {
+        assignedAgentId = lead.assignedTo;
+      }
+    }
+
+    // Ensure assignedAgentId is a valid ObjectId or null
+    const finalAssignedTo = mongoose.isValidObjectId(assignedAgentId) ? new mongoose.Types.ObjectId(assignedAgentId) : null;
     const newcustomer = await Customer.create({
       name,
       mobile,
@@ -50,7 +62,9 @@ const customersController = {
       payment: "pending",
       status: customerstatus ? customerstatus._id : null,
       createdBy: userId,
+      assignedTo: finalAssignedTo, // Use the determined and validated assignedAgentId
       isActive: false,
+      leadId: leadId || null, // Store leadId if provided
     });
 
     res.status(200).json({ newcustomer });
@@ -134,104 +148,133 @@ const customersController = {
       });
     }
   }),
+list: asynchandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
 
-  list: asynchandler(async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+  const {
+    paymentStatus,
+    activestatus,
+    searchText,
+    date,
+    startDate,
+    endDate,
+    assignedTo,
+  } = req.query;
 
-    const {
-      paymentStatus,
-      activestatus,
-      searchText,
-      date,
-      startDate,
-      endDate,
-    } = req.query;
+  let query = {};
+  const { role, id } = req.user;
 
-    let query = {};
+  // ===== ROLE BASED VISIBILITY =====
+  if (role === "Admin") {
+    // Admin → Can view all customers
+    query = {};
+  } 
+  else if (role === "Sub-Admin") {
+    // Sub-Admin → Can view:
+    // 1️⃣ Customers created by them
+    // 2️⃣ Customers assigned to them
+    // 3️⃣ Customers created by Agents assigned to them
+    const assignedAgents = await User.find({ assignedTo: id, role: "Agent" }).select("_id");
+    const agentIds = assignedAgents.map((agent) => agent._id);
 
-    if (
-      paymentStatus &&
-      ["pending", "partially paid", "paid", "unpaid"].includes(paymentStatus)
-    ) {
-      query.payment = paymentStatus;
+    query = {
+      $or: [
+        { createdBy: id },
+        { assignedTo: id },
+        { createdBy: { $in: agentIds } },
+      ],
+    };
+  } 
+  else if (role === "Agent") {
+    // Agent → Can view customers they created or assigned to them
+    query = { $or: [{ createdBy: id }, { assignedTo: id }] };
+  } 
+  else if (assignedTo) {
+    query.assignedTo = assignedTo;
+  }
+
+  // ===== FILTERS =====
+
+  // Payment Status filter
+  if (paymentStatus && ["pending", "partially paid", "paid", "unpaid"].includes(paymentStatus)) {
+    query.payment = paymentStatus;
+  }
+
+  // Active/Inactive filter
+  if (activestatus && ["Active", "Inactive"].includes(activestatus)) {
+    query.isActive = activestatus === "Active";
+  }
+
+  // Search filter
+  if (searchText) {
+    query.$or = [
+      { name: { $regex: searchText, $options: "i" } },
+      { mobile: { $regex: searchText, $options: "i" } },
+      { email: { $regex: searchText, $options: "i" } },
+    ];
+  }
+
+  // Date filters
+  if (date === "today") {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    query.createdAt = { $gte: today, $lt: new Date(today.getTime() + 86400000) };
+  } else if (date === "yesterday") {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    query.createdAt = { $gte: yesterday, $lt: new Date(yesterday.getTime() + 86400000) };
+  } else if (date === "custom" && startDate) {
+    const custom = new Date(startDate);
+    custom.setHours(0, 0, 0, 0);
+    query.createdAt = { $gte: custom, $lt: new Date(custom.getTime() + 86400000) };
+  } else if (date === "range" && startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      end.setHours(23, 59, 59, 999);
+      query.createdAt = { $gte: start, $lte: end };
     }
+  }
 
-    if (activestatus && ["Active", "Inactive"].includes(activestatus)) {
-      query.isActive = activestatus === "Active" ? true : false;
-    }
+  // ===== PAGINATION + POPULATION =====
+  const total = await Customer.countDocuments(query);
 
-    if (searchText) {
-      query.$or = [
-        { name: { $regex: searchText, $options: "i" } },
-        { mobile: { $regex: searchText, $options: "i" } },
-        { email: { $regex: searchText, $options: "i" } },
-      ];
-    }
+  const customers = await Customer.find(query)
+    .populate("createdBy", "name role")
+    .populate({
+      path: "leadId",
+      select: "status userDetails leadvalue source",
+      populate: { path: "source", select: "title" },
+    })
+    .populate("status", "title")
+    .populate("assignedTo", "name role")
+    .skip(skip)
+    .limit(limit)
+    .sort({ createdAt: -1 })
+    .lean();
 
-    if (date === "today") {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: today,
-        $lt: new Date(today.getTime() + 86400000),
-      };
-    } else if (date === "yesterday") {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      yesterday.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: yesterday,
-        $lt: new Date(yesterday.getTime() + 86400000),
-      };
-    } else if (date === "custom" && startDate) {
-      const custom = new Date(startDate);
-      custom.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: custom,
-        $lt: new Date(custom.getTime() + 86400000),
-      };
-    } else if (date === "range" && startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        query.createdAt = { $gte: start, $lte: end };
-      }
-    }
-
-    const total = await Customer.countDocuments(query);
-
-    const convertedcustomers = await Customer.find(query)
-      .populate("createdBy", "name")
-      .populate({
-        path: "leadId",
-        select: "status userDetails leadvalue source",
-        populate: {
-          path: "source",
-          select: "title",
-        },
-      })
-      .populate("status", "title")
-      .skip(skip)
-      .limit(limit)
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.status(200).json({
-      customers: convertedcustomers,
-      currentPage: page,
-      totalPages: Math.ceil(total / limit),
-      totalCustomers: total,
-    });
-  }),
+  res.status(200).json({
+    customers,
+    currentPage: page,
+    totalPages: Math.ceil(total / limit),
+    totalCustomers: total,
+  });
+}),
 
   getCustomer: asynchandler(async (req, res) => {
     const { id } = req.params;
     const getCustomer = await Customer.find({ product: id });
     if (!getCustomer) {
       return res.status(404).send("customer not found");
+    } 
+    const role = getCustomer.createdBy
+    if(role ==="Admin"){
+
+    }else {
+
     }
 
     return res.status(200).json({
@@ -384,3 +427,5 @@ const customersController = {
 };
 
 module.exports = customersController;
+
+//saviyo ...............

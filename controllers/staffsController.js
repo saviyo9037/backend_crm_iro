@@ -25,6 +25,7 @@ const staffsController = {
             mobile,
             password: hashvalidate,
             role,
+            createdBy: req.user.id
         })
 
         const payload = {
@@ -93,8 +94,30 @@ const staffsController = {
     }),
 
     get_staffs: asynchandler(async (req, res) => {
-        const subadmins = await User.find({ role: { $in: ['Sub-Admin', 'Agent'] } }).populate('assignedAgents', 'name')
-        res.status(200).json(subadmins)
+        const { role, id } = req.user;
+
+        if (role === 'Admin') {
+            const staffs = await User.find({ role: { $in: ['Sub-Admin', 'Agent'] } })
+                .populate('assignedAgents', 'name')
+                .populate('assignedLeads', 'name source status'); // Populate assignedLeads
+            return res.status(200).json(staffs);
+        }
+
+        if (role === 'Sub-Admin') {
+            const staffs = await User.find({
+                role: 'Agent',
+                $or: [
+                    { createdBy: id },
+                    { assignedTo: id }
+                ]
+            })
+                .populate('assignedAgents', 'name')
+                .populate('assignedLeads', 'name source status'); // Populate assignedLeads
+            return res.status(200).json(staffs);
+        }
+
+        // Agents or other roles should not see any staff.
+        return res.status(200).json([]);
     }),
 
     get_agents: asynchandler(async (req, res) => {

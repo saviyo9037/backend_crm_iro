@@ -8,11 +8,13 @@ const leadsController = require('../controllers/leadsController')
 const leadsRouter = express.Router()
 
 
-// leadsRouter.get("/get/:id",leadsController.get_details);
+// leadsRouter.get("/:id",leadsController.get_details);
+leadsRouter.get("/monthly-summary", isAuth, leadsController.getMonthlySummary);
 leadsRouter.post('/add',isAuth,leadsController.add)
 leadsRouter.post('/upload-bulkleads',isAuth,csvUpload.single('csvfile'),leadsController.upload_csvbulkleads)
 leadsRouter.get('/csv-template',leadsController.download_csvtemplate)
 leadsRouter.get('/list',isAuth,leadsController.list)
+leadsRouter.get('/list-admin',isAuth,leadsController.listLeadsAdmin)
 leadsRouter.get('/list-openleads',isAuth,leadsController.list_openleads)
 leadsRouter.get('/view-pdf',isAuth,leadsController.view_pdf)
 leadsRouter.put('/assign/:id',isAuth,leadsController.assign)
@@ -23,6 +25,7 @@ leadsRouter.put('/update-priority/:id',isAuth,leadsController.update_priority)
 leadsRouter.put('/update-status/:id',isAuth,leadsController.update_status)
 leadsRouter.put('/set-nextfollowup/:id',isAuth,leadsController.set_nextfollowup)
 leadsRouter.delete('/delete-multipleleads',isAuth,leadsController.delete_multipleleads)
+leadsRouter.delete('/delete-all-leads',isAuth,leadsController.deleteAllLeads)
 // leadsRouter.delete("/:id/followups/rejected", leadsController.removeRejectedFollowup);
 
 

@@ -17,7 +17,6 @@ const paymentController = {
         paymentMode,
         transactionRecordBy,
       } = req.body;
-
       // 🔹 Step 1: Validate required fields
       if (
         !productId ||
@@ -148,7 +147,17 @@ const paymentController = {
     });
   }),
     getPayments: expressAsyncHandler(async (req, res) => {
-    const allPayment = await Payments.find().populate("customer", "name").populate("transactions", "paidAmount");
+    const { startDate, endDate } = req.query;
+
+    const dateFilter = {};
+    if (startDate && endDate) {
+      dateFilter.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+
+    const allPayment = await Payments.find(dateFilter).populate("customer", "name").populate("transactions", "paidAmount");
 
     if (!allPayment) {
       return res.status(404).send("payment not found");
@@ -176,7 +185,17 @@ const paymentController = {
     });
   }),
   getProductPaymentDetails: expressAsyncHandler(async (req, res) => {
-    const getProductPayment = await Transaction.find()
+    const { startDate, endDate } = req.query;
+
+    const dateFilter = {};
+    if (startDate && endDate) {
+      dateFilter.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+
+    const getProductPayment = await Transaction.find(dateFilter)
       .populate({
         path: "payment",
          select: "totalAmount totalPaid customer product",

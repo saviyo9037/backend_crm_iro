@@ -10,6 +10,57 @@ const csv = require("csv-parser");
 const { error } = require("console");
 
 const leadsController = {
+  getMonthlySummary: asynchandler(async (req, res) => {
+    const { startDate, endDate } = req.query;
+
+    // 1. Define the date range
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate
+      ? new Date(startDate)
+      : new Date(new Date().setMonth(end.getMonth() - 6));
+
+    // 2. Aggregation pipeline
+    const monthlySummary = await User.aggregate([
+      {
+        $match: {
+          role: "user",
+          createdAt: { $gte: start, $lte: end },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" },
+          },
+          newLeads: {
+            $sum: { $cond: [{ $eq: ["$status", "new"] }, 1, 0] },
+          },
+          closedLeads: {
+            $sum: {
+              $cond: [
+                { $in: ["$status", ["closed", "converted", "rejected"]] },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+      {
+        $sort: { "_id.year": 1, "_id.month": 1 },
+      },
+    ]);
+
+    // 3. Format the data for the chart
+    const formattedSummary = monthlySummary.map((item) => ({
+      month: `${item._id.year}-${String(item._id.month).padStart(2, "0")}`,
+      newLeads: item.newLeads,
+      closedLeads: item.closedLeads,
+    }));
+
+    res.status(200).json({ monthlySummary: formattedSummary });
+  }),
   add: asynchandler(async (req, res) => {
     const {
       name,
@@ -46,6 +97,12 @@ const leadsController = {
         .status(400)
         .json({ message: "Lead with this mobile number exists" });
     }
+    const roleCheck = await User.findById(adminId);
+    let assignedTo = null; // Default to null for Admin
+    if (roleCheck.role === "Agent") {
+      assignedTo = adminId; // Assign to the Agent who created it
+    }
+
 
     const newLead = await User.create({
       name,
@@ -56,13 +113,16 @@ const leadsController = {
       interestedproduct,
       leadvalue,
       role: "user",
-      createdBy: adminId,
+     createdBy: adminId,
+assignedTo,
+
       status: "new",
       whatsapp,
     });
 
     if (newLead) {
-      const creator = await Customer.findById(adminId);
+      const creator = await User.findById(adminId);
+      console.log("roleeeeee", creator)
       const notificationRecipients = [];
 
       // Notify creator
@@ -114,6 +174,24 @@ const leadsController = {
     const leads = await User.findById(id);
     if (!leads) {
       return res.status(400).json({ message: "Lead not found" });
+    }
+
+    const staffToAssign = await User.findById(staffId);
+    if (!staffToAssign) {
+      return res.status(400).json({ message: "Staff to assign not found" });
+    }
+
+    // Role-based assignment logic
+    if (currentUser.role === "Admin") {
+      // Admin can assign to anyone (Sub-Admin or Agent)
+    } else if (currentUser.role === "Sub-Admin") {
+      // Sub-Admin can only assign to Agents
+      if (staffToAssign.role !== "Agent") {
+        return res.status(403).json({ message: "Sub-Admin can only assign leads to Agents" });
+      }
+    } else {
+      // Other roles (e.g., Agent) cannot assign leads
+      return res.status(403).json({ message: "You are not authorized to assign leads" });
     }
 
     if (!isAssigning) {
@@ -183,6 +261,105 @@ const leadsController = {
     res.status(200).json({ assignedlead });
   }),
 
+  listLeadsAdmin: asynchandler(async (req, res) => {
+    // Ensure only Admin can access this route
+    if (req.user.role !== "Admin") {
+      return res.status(403).json({ message: "Forbidden: Only Admin users can access this resource." });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    let query = { role: "user" };
+    // Extract filter parameters
+    const {
+      priority,
+      status,
+      searchText,
+      date,
+      startDate,
+      endDate,
+      sortBy,
+      filterleads,
+    } = req.query;
+
+    if (
+      priority &&
+      ["hot", "warm", "cold", "Not Assigned"].includes(priority)
+    ) {
+      query.priority = priority;
+    }
+    if (filterleads === "Assigned") {
+      query.assignedTo = { $exists: true, $ne: null };
+    } else if (filterleads === "Unassigned") {
+      query.assignedTo = { $exists: false };
+    }
+    if (searchText) {
+      query.name = { $regex: searchText, $options: "i" };
+    }
+    if (status) {
+      if (Array.isArray(status) && status.every(s => ["new", "open", "converted", "walkin", "paused", "rejected", "unavailable"].includes(s))) {
+        query.status = { $in: status };
+      } else if (["new", "open", "converted", "walkin", "paused", "rejected", "unavailable"].includes(status)) {
+        query.status = status;
+      }
+    }
+
+    // Add date range filtering
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        // Adjust end date to include the entire day
+        end.setHours(23, 59, 59, 999);
+        query.createdAt = { $gte: start, $lte: end };
+      }
+    }
+    console.log("listLeadsAdmin Query:", query);
+    const total = await User.countDocuments(query);
+    console.log("listLeadsAdmin Total Leads (after query):", total);
+    let leadsQuery = User.find(query)
+      .populate("createdBy", "name")
+      .populate("assignedTo", "name")
+      .populate("updatedBy", "name")
+      .populate("nextfollowupupdatedBy", "role name")
+      .populate("source")
+      .populate("userDetails.leadFormId", "name type options ")
+      .sort({ createdAt: -1 })
+      .lean(); // Add .lean() to return plain JavaScript objects
+
+    if (req.query.noLimit !== 'true') {
+      leadsQuery = leadsQuery.skip(skip).limit(limit);
+    }
+
+    const leads = await leadsQuery;
+    console.log("listLeadsAdmin Leads Count (after execution):", leads.length);
+    console.log("listLeadsAdmin Sample Lead (first 5, with assignedTo/createdBy):", leads.slice(0, 5).map(l => ({ _id: l._id, name: l.name, createdBy: l.createdBy?.name, assignedTo: l.assignedTo?.name })));
+
+    const leadforms = await Leadform.find();
+
+    res.status(200).json({
+      leads,
+      leadforms,
+      currentPage: req.query.noLimit === 'true' ? 1 : page,
+      totalPages: req.query.noLimit === 'true' ? 1 : Math.ceil(total / limit),
+      totalLeads: total,
+    });
+  }),
+
+  getAgentSubAdminLeadCounts: asynchandler(async (req, res) => {
+    const leadCounts = await User.aggregate([
+      { $match: { role: "user" } },
+      { $group: { _id: "$assignedTo", count: { $sum: 1 } } },
+      { $lookup: { from: "users", localField: "_id", foreignField: "_id", as: "assignedToUser" } },
+      { $unwind: "$assignedToUser" },
+      { $project: { _id: 0, userId: "$_id", name: "$assignedToUser.name", role: "$assignedToUser.role", count: "$count" } }
+    ]);
+
+    res.status(200).json({ leadCounts });
+  }),
+
   list: asynchandler(async (req, res) => {
     const { role, id } = req.user;
     const page = parseInt(req.query.page) || 1;
@@ -205,12 +382,22 @@ const leadsController = {
     let query = { role: "user" };
 
     // Role-based query
-    if (role === "Admin") {
+    if (role === "Sub-Admin") {
+      const subAdmin = await User.findById(id).populate('assignedAgents', 'id');
+      const agentIds = subAdmin.assignedAgents.map(agent => agent.id);
+      query = {
+        role: "user",
+        $or: [
+          { createdBy: id },
+          { assignedTo: id },
+          { createdBy: { $in: agentIds } },
+          { assignedTo: { $in: agentIds } },
+        ],
+      };
+    } else if(role === "Agent") {
+            query = { role: "user", $or: [{ createdBy: id }, { assignedTo: id }] };
+    } else { // Agent and other roles
       query = { role: "user" };
-    } else if (role === "Sub-Admin") {
-      query = { role: "user", $or: [{ createdBy: id }, { assignedTo: id }] };
-    } else {
-      query = { role: "user", assignedTo: id };
     }
 
     // Apply filters
@@ -225,30 +412,18 @@ const leadsController = {
     } else if (filterleads === "Unassigned") {
       query.assignedTo = { $exists: false };
     }
-    if (
-      status &&
-      [
-        "new",
-        "open",
-        "converted",
-        "walkin",
-        "paused",
-        "rejected",
-        "unavailable",
-      ].includes(status)
-    ) {
-      query.status = status;
-    }
-    if (assignedTo) {
-      query.assignedTo = assignedTo;
-    }
     if (searchText) {
-      query.$or = [
-        { name: { $regex: searchText, $options: "i" } },
-        { mobile: { $regex: searchText, $options: "i" } },
-      ];
+      query.name = { $regex: searchText, $options: "i" };
     }
-    if (date === "today") {
+    //............savio changed.....
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        query.createdAt = { $gte: start, $lte: end };
+      }
+    } else if (date === "today") {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       query.createdAt = {
@@ -270,13 +445,6 @@ const leadsController = {
         $gte: customDate,
         $lt: new Date(customDate.getTime() + 24 * 60 * 60 * 1000),
       };
-    } else if (date === "range" && startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        query.createdAt = { $gte: start, $lte: end };
-      }
     }
 
     // Sorting
@@ -288,25 +456,29 @@ const leadsController = {
     }
 
     const total = await User.countDocuments(query);
-    const leads = await User.find(query)
+    let leadsQuery = User.find(query)
       .populate("createdBy", "name")
+      .populate("assignedLeads","name")
       .populate("assignedTo", "name")
       .populate("updatedBy", "name")
       .populate("nextfollowupupdatedBy", "role name")
       .populate("source")
       .populate("userDetails.leadFormId", "name type options ")
-      
-      .sort(sort)
-      .skip(skip)
-      .limit(limit);
+      .sort(sort);
+
+    if (req.query.noLimit !== 'true') {
+      leadsQuery = leadsQuery.skip(skip).limit(limit);
+    }
+
+    const leads = await leadsQuery;
 
     const leadforms = await Leadform.find();
 
     res.status(200).json({
       leads,
       leadforms,
-      currentPage: page,
-      totalPages: Math.ceil(total / limit),
+      currentPage: req.query.noLimit === 'true' ? 1 : page,
+      totalPages: req.query.noLimit === 'true' ? 1 : Math.ceil(total / limit),
       totalLeads: total,
     });
   }),
@@ -450,10 +622,16 @@ const leadsController = {
     if (role === "Admin") {
       query = { role: "user", status: "open" };
     } else if (role === "Sub-Admin") {
+      const subAdmin = await User.findById(id);
+      const agentIds = subAdmin.assignedAgents || [];
       query = {
         role: "user",
         status: "open",
-        $or: [{ createdBy: id }, { assignedTo: id }],
+        $or: [
+          { createdBy: id },
+          { assignedTo: id },
+          { assignedTo: { $in: agentIds } },
+        ],
       };
     } else {
       query = { role: "user", status: "open", assignedTo: id };
@@ -462,14 +640,13 @@ const leadsController = {
     if (priority && ["hot", "warm", "cold", "Lukewarm"].includes(priority)) {
       query.priority = priority;
     }
-    if (assignedTo) {
+    if (req.query.noLimit === 'true') {
+      delete query.assignedTo; // Explicitly remove assignedTo filter if noLimit is true
+    } else if (assignedTo && filterleads !== "All") { // Apply assignedTo filter only if filterleads is not "All"
       query.assignedTo = assignedTo;
     }
     if (searchText) {
-      query.$or = [
-        { name: { $regex: searchText, $options: "i" } },
-        { mobile: { $regex: searchText, $options: "i" } },
-      ];
+      query.name = { $regex: searchText, $options: "i" };
     }
     if (date === "today") {
       const today = new Date();
@@ -632,6 +809,9 @@ const leadsController = {
       }
     }
 
+    // saviyo changed the ...........................................................................
+    customer.updatedBy =req.user.id;
+
     // Save changes
     await customer.save();
 
@@ -791,6 +971,7 @@ const leadsController = {
 
 
   upload_csvbulkleads: asynchandler(async (req, res) => {
+    // This endpoint is accessible to all authenticated roles.
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
@@ -825,6 +1006,7 @@ const leadsController = {
           leadvalue: normalizedRow.leadvalue || "",
           role: "user",
           whatsapp: normalizedRow.whatsapp,
+          assignedto: normalizedRow.assignedto || "", // Add assignedto field
         });
       })
       .on("end", async () => {
@@ -859,6 +1041,23 @@ const leadsController = {
               }
             }
 
+            let assignedTo = null;
+            if (lead.assignedto) {
+              const assignedToUser = await User.findOne({ name: lead.assignedto });
+              if (assignedToUser) {
+                assignedTo = assignedToUser._id;
+              } else {
+                console.warn(
+                  `Agent "${lead.assignedto}" not found. Lead will not be assigned to this agent.`
+                );
+              }
+            } else {
+              // If no assignedto in CSV, use the uploader's role for assignment
+              if (createdByUser.role === "Agent" || createdByUser.role === "Sub-Admin") {
+                assignedTo = createdByUser._id;
+              }
+            }
+
             processedLeads.push({
               name: lead.name,
               mobile: lead.mobile,
@@ -870,6 +1069,7 @@ const leadsController = {
               leadvalue: lead.leadvalue,
               role: lead.role,
               whatsapp: lead.whatsapp,
+              assignedTo: assignedTo, // Assign the determined assignedTo value
             });
           }
 
@@ -920,6 +1120,7 @@ const leadsController = {
 
           res.status(200).json({
             message: `Successfully uploaded ${processedLeads.length} leads`,
+            data: processedLeads,
           });
         } catch (err) {
           console.error(err);
@@ -932,8 +1133,8 @@ const leadsController = {
 
   download_csvtemplate: asynchandler(async (req, res) => {
     const csvHeaders =
-      "Name,Mobile,Source,Location,Interestedproducts,Leadvalue\n";
-    const sampleRow = "John Doe,Naukri,Thrissur,BCA,20000\n";
+      "Name,Mobile,Source,Location,Interestedproducts,Leadvalue,Assignedto\n";
+    const sampleRow = "John Doe,Naukri,Thrissur,BCA,20000,AgentName\n";
     const csvData = csvHeaders + sampleRow;
 
     res.setHeader("Content-Type", "text/csv");
@@ -989,6 +1190,20 @@ const leadsController = {
       .json({ message: `${result.deletedCount} lead(s) deleted successfully` });
   }),
 
+  deleteAllLeads: asynchandler(async (req, res) => {
+    if (req.user.role !== "Admin") {
+      return res.status(403).json({ message: "Forbidden: Only Admin users can delete all leads." });
+    }
+
+    const result = await User.deleteMany({ role: "user" });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "No leads found to delete." });
+    }
+
+    res.status(200).json({ message: `${result.deletedCount} leads deleted successfully.` });
+  }),
+
   // removeRejectedFollowup : async (req, res) => {
   //   try {
   //     const lead = await Leadform.findById(req.params.id);
@@ -1008,3 +1223,8 @@ const leadsController = {
 };
 
 module.exports = leadsController;
+
+
+
+
+//  saviyo......................

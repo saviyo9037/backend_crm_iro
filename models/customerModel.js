@@ -11,16 +11,20 @@ const customerSchema = new mongoose.Schema(
       type: String,
       required: [true, "Mobile number is required"],
       unique: true,
-      match: [/^[0-9]{10}$/, "Enter a valid 10-digit mobile number"],
+      // chaned saviyo >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>................................................
+      // match: [/^[0-9]{10}$/, "Enter a valid 10-digit mobile number"],
     },
     alternativemobile: {
       type: String,
-      match: [/^\+?[1-9]\d{1,14}$/, "Invalid alternative mobile number format"],
+      // chaned saviyo >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>................................................
+
+      // match: [/^\+?[1-9]\d{1,14}$/, "Invalid alternative mobile number format"],
       sparse: true,
     },
     email: {
       type: String,
-      match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
+      // chaned saviyo >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>................................................
+      // match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
       sparse: true,
       lowercase: true,
       trim: true,
@@ -29,6 +33,10 @@ const customerSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "Creator is required"],
+    },
+    assignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,

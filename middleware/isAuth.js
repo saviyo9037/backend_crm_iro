@@ -8,7 +8,13 @@ const isAuth = (async (req, res, next) => {
         return res.status(401).json({ message: "Authorization Denied" });
     }
 
-    const decoded = JWT.verify(token, process.env.JWT_SECRET_KEY);
+    let decoded;
+    try {
+        decoded = JWT.verify(token, process.env.JWT_SECRET_KEY);
+    } catch (error) {
+        return res.status(401).json({ message: "Invalid token" });
+    }
+
     if (!decoded) {
         return res.status(401).json({ message: "Invalid token" });
     }
@@ -38,3 +44,6 @@ const isAuth = (async (req, res, next) => {
 })
 
 module.exports = isAuth;
+
+
+// saviyo ..................
