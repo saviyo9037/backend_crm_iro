@@ -8,7 +8,7 @@ const Notification = require("../models/notificationModel");
 const fs = require("fs");
 const csv = require("csv-parser");
 const { error } = require("console");
-
+const { userInfo } = require("os");
 const leadsController = {
   getMonthlySummary: asynchandler(async (req, res) => {
     const { startDate, endDate } = req.query;
@@ -114,7 +114,7 @@ const leadsController = {
       leadvalue,
       role: "user",
      createdBy: adminId,
-assignedTo,
+     assignedTo,
 
       status: "new",
       whatsapp,
