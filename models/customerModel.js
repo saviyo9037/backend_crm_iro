@@ -11,20 +11,14 @@ const customerSchema = new mongoose.Schema(
       type: String,
       required: [true, "Mobile number is required"],
       unique: true,
-      // chaned saviyo >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>................................................
-      // match: [/^[0-9]{10}$/, "Enter a valid 10-digit mobile number"],
+      match: [/^[+]?[0-9]{10,15}$/, "Enter a valid mobile number"],
     },
     alternativemobile: {
       type: String,
-      // chaned saviyo >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>................................................
-
-      // match: [/^\+?[1-9]\d{1,14}$/, "Invalid alternative mobile number format"],
       sparse: true,
     },
     email: {
       type: String,
-      // chaned saviyo >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>................................................
-      // match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
       sparse: true,
       lowercase: true,
       trim: true,
@@ -58,6 +52,9 @@ const customerSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: false,
+    },
+    lastContacted: {
+      type: Date,
     },
     userDetails: [
       {

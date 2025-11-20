@@ -5,21 +5,23 @@ const Customer = require("../models/customerModel");
 const Setting = require("../models/settingsModel");
 const Leadform = require("../models/leadformModel");
 const Notification = require("../models/notificationModel");
+
 const fs = require("fs");
 const csv = require("csv-parser");
-const { error } = require("console");
+const axios = require("axios");
+
+// ===================== LEADS CONTROLLER =====================
 
 const leadsController = {
+  // ========= 1. MONTHLY SUMMARY (Reports) =========
   getMonthlySummary: asynchandler(async (req, res) => {
     const { startDate, endDate } = req.query;
 
-    // 1. Define the date range
     const end = endDate ? new Date(endDate) : new Date();
     const start = startDate
       ? new Date(startDate)
       : new Date(new Date().setMonth(end.getMonth() - 6));
 
-    // 2. Aggregation pipeline
     const monthlySummary = await User.aggregate([
       {
         $match: {
@@ -52,7 +54,6 @@ const leadsController = {
       },
     ]);
 
-    // 3. Format the data for the chart
     const formattedSummary = monthlySummary.map((item) => ({
       month: `${item._id.year}-${String(item._id.month).padStart(2, "0")}`,
       newLeads: item.newLeads,
@@ -61,7 +62,12 @@ const leadsController = {
 
     res.status(200).json({ monthlySummary: formattedSummary });
   }),
+
+  // ========= 2. ADD LEAD =========
   add: asynchandler(async (req, res) => {
+    console.log("--- leadsController.add ---");
+    console.log("Body:", req.body);
+
     const {
       name,
       email,
@@ -86,23 +92,30 @@ const leadsController = {
       }
     }
 
-    const existingLead = await User.findOne({ email });
-    if (existingLead) {
-      return res.status(400).json({ message: "Lead with this mail id exists" });
+    // Check duplicate email only if provided
+    if (email) {
+      const existingLead = await User.findOne({ email });
+      if (existingLead) {
+        return res
+          .status(400)
+          .json({ message: "Lead with this mail id exists" });
+      }
     }
 
+    // Check duplicate mobile always
     const mobileExists = await User.findOne({ mobile });
     if (mobileExists) {
       return res
         .status(400)
         .json({ message: "Lead with this mobile number exists" });
     }
-    const roleCheck = await User.findById(adminId);
-    let assignedTo = null; // Default to null for Admin
-    if (roleCheck.role === "Agent") {
-      assignedTo = adminId; // Assign to the Agent who created it
-    }
 
+    // Role-based default assignment
+    const roleCheck = await User.findById(adminId);
+    let assignedTo = null;
+    if (roleCheck && roleCheck.role === "Agent") {
+      assignedTo = adminId; // agent creating gets assigned to self
+    }
 
     const newLead = await User.create({
       name,
@@ -113,16 +126,15 @@ const leadsController = {
       interestedproduct,
       leadvalue,
       role: "user",
-     createdBy: adminId,
-assignedTo,
-
+      createdBy: adminId,
+      assignedTo,
       status: "new",
       whatsapp,
     });
 
     if (newLead) {
       const creator = await User.findById(adminId);
-      console.log("roleeeeee", creator)
+      console.log("Lead creator:", creator?.role, creator?.name);
       const notificationRecipients = [];
 
       // Notify creator
@@ -133,8 +145,8 @@ assignedTo,
         isRead: false,
       });
 
-      // Admin notification (if creator is not admin)
-      if (creator.role !== "Admin") {
+      // If creator is not Admin, notify Admin + agents under this staff
+      if (creator && creator.role !== "Admin") {
         const admin = await User.findOne({ role: "Admin" });
         if (admin) {
           notificationRecipients.push({
@@ -145,7 +157,7 @@ assignedTo,
           });
         }
 
-        // Notify agents assigned to this staff
+        // Agents assigned to this staff
         const agents = await User.find({ assignedTo: adminId, role: "Agent" });
         agents.forEach((agent) => {
           notificationRecipients.push({
@@ -159,11 +171,14 @@ assignedTo,
 
       await Notification.create(notificationRecipients);
     }
+
     res
       .status(200)
       .json({ message: "Lead created successfully", data: newLead });
   }),
 
+  // ========= 3. ASSIGN / UNASSIGN LEAD =========
+  
   assign: asynchandler(async (req, res) => {
     const { id } = req.params;
     const { staffId, isAssigning } = req.body;
@@ -261,28 +276,33 @@ assignedTo,
     res.status(200).json({ assignedlead });
   }),
 
+
+  // ========= 4. ADMIN LEADS LIST =========
   listLeadsAdmin: asynchandler(async (req, res) => {
-    // Ensure only Admin can access this route
     if (req.user.role !== "Admin") {
-      return res.status(403).json({ message: "Forbidden: Only Admin users can access this resource." });
+      return res
+        .status(403)
+        .json({ message: "Forbidden: Only Admin users can access this resource." });
     }
 
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit =
+      req.query.noLimit === "true"
+        ? Number.MAX_SAFE_INTEGER
+        : parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    let query = { role: "user" };
-    // Extract filter parameters
     const {
       priority,
       status,
       searchText,
-      date,
       startDate,
       endDate,
       sortBy,
       filterleads,
     } = req.query;
+
+    let query = { role: "user" };
 
     if (
       priority &&
@@ -290,83 +310,200 @@ assignedTo,
     ) {
       query.priority = priority;
     }
+
     if (filterleads === "Assigned") {
       query.assignedTo = { $exists: true, $ne: null };
     } else if (filterleads === "Unassigned") {
-      query.assignedTo = { $exists: false };
+      // treat missing or null as unassigned
+      query.$or = [{ assignedTo: { $exists: false } }, { assignedTo: null }];
     }
+
     if (searchText) {
       query.name = { $regex: searchText, $options: "i" };
     }
+
     if (status) {
-      if (Array.isArray(status) && status.every(s => ["new", "open", "converted", "walkin", "paused", "rejected", "unavailable"].includes(s))) {
-        query.status = { $in: status };
-      } else if (["new", "open", "converted", "walkin", "paused", "rejected", "unavailable"].includes(status)) {
+      const validStatuses = [
+        "new",
+        "open",
+        "converted",
+        "walkin",
+        "paused",
+        "rejected",
+        "unavailable",
+      ];
+      if (Array.isArray(status)) {
+        const filtered = status.filter((s) => validStatuses.includes(s));
+        if (filtered.length) query.status = { $in: filtered };
+      } else if (validStatuses.includes(status)) {
         query.status = status;
       }
     }
 
-    // Add date range filtering
     if (startDate && endDate) {
       const start = new Date(startDate);
       const end = new Date(endDate);
       if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        // Adjust end date to include the entire day
         end.setHours(23, 59, 59, 999);
         query.createdAt = { $gte: start, $lte: end };
       }
     }
-    console.log("listLeadsAdmin Query:", query);
+
+    let sort = { createdAt: -1 };
+    if (sortBy === "ascleadvalue") sort = { leadvalue: 1 };
+    else if (sortBy === "descleadvalue") sort = { leadvalue: -1 };
+
     const total = await User.countDocuments(query);
-    console.log("listLeadsAdmin Total Leads (after query):", total);
-    let leadsQuery = User.find(query)
-      .populate("createdBy", "name")
-      .populate("assignedTo", "name")
-      .populate("updatedBy", "name")
-      .populate("nextfollowupupdatedBy", "role name")
-      .populate("source")
-      .populate("userDetails.leadFormId", "name type options ")
-      .sort({ createdAt: -1 })
-      .lean(); // Add .lean() to return plain JavaScript objects
 
-    if (req.query.noLimit !== 'true') {
-      leadsQuery = leadsQuery.skip(skip).limit(limit);
-    }
+    const aggregationPipeline = [
+      { $match: query },
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: "users",
+          localField: "createdBy",
+          foreignField: "_id",
+          as: "createdByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedTo",
+          foreignField: "_id",
+          as: "assignedToUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "updatedBy",
+          foreignField: "_id",
+          as: "updatedByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "nextfollowupupdatedBy",
+          foreignField: "_id",
+          as: "nextfollowupupdatedByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "settings",
+          localField: "source",
+          foreignField: "_id",
+          as: "sourceDetails",
+        },
+      },
+      { $unwind: { path: "$createdByUser", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$assignedToUser", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$updatedByUser", preserveNullAndEmptyArrays: true } },
+      {
+        $unwind: {
+          path: "$nextfollowupupdatedByUser",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      { $unwind: { path: "$sourceDetails", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          name: 1,
+          email: 1,
+          mobile: 1,
+          location: 1,
+          interestedproduct: 1,
+          leadvalue: 1,
+          role: 1,
+          status: 1,
+          whatsapp: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          priority: 1,
+          nextFollowUp: 1,
+          createdBy: {
+            _id: "$createdByUser._id",
+            name: "$createdByUser.name",
+          },
+          assignedTo: {
+            _id: "$assignedToUser._id",
+            name: "$assignedToUser.name",
+            role: "$assignedToUser.role",
+          },
+          updatedBy: {
+            _id: "$updatedByUser._id",
+            name: "$updatedByUser.name",
+          },
+          nextfollowupupdatedBy: {
+            _id: "$nextfollowupupdatedByUser._id",
+            role: "$nextfollowupupdatedByUser.role",
+            name: "$nextfollowupupdatedByUser.name",
+          },
+          source: "$sourceDetails",
+          userDetails: 1,
+        },
+      },
+    ];
 
-    const leads = await leadsQuery;
-    console.log("listLeadsAdmin Leads Count (after execution):", leads.length);
-    console.log("listLeadsAdmin Sample Lead (first 5, with assignedTo/createdBy):", leads.slice(0, 5).map(l => ({ _id: l._id, name: l.name, createdBy: l.createdBy?.name, assignedTo: l.assignedTo?.name })));
-
+    const leads = await User.aggregate(aggregationPipeline);
     const leadforms = await Leadform.find();
 
     res.status(200).json({
       leads,
       leadforms,
-      currentPage: req.query.noLimit === 'true' ? 1 : page,
-      totalPages: req.query.noLimit === 'true' ? 1 : Math.ceil(total / limit),
+      currentPage: req.query.noLimit === "true" ? 1 : page,
+      totalPages:
+        req.query.noLimit === "true" ? 1 : Math.ceil(total / limit),
       totalLeads: total,
     });
   }),
 
+  // ========= 5. AGENT / SUBADMIN LEAD COUNTS =========
   getAgentSubAdminLeadCounts: asynchandler(async (req, res) => {
     const leadCounts = await User.aggregate([
       { $match: { role: "user" } },
       { $group: { _id: "$assignedTo", count: { $sum: 1 } } },
-      { $lookup: { from: "users", localField: "_id", foreignField: "_id", as: "assignedToUser" } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "assignedToUser",
+        },
+      },
       { $unwind: "$assignedToUser" },
-      { $project: { _id: 0, userId: "$_id", name: "$assignedToUser.name", role: "$assignedToUser.role", count: "$count" } }
+      {
+        $project: {
+          _id: 0,
+          userId: "$_id",
+          name: "$assignedToUser.name",
+          role: "$assignedToUser.role",
+          count: "$count",
+        },
+      },
     ]);
 
     res.status(200).json({ leadCounts });
   }),
 
+  // ========= 6. LEADS LIST (role-based: Admin / SubAdmin / Agent) =========
   list: asynchandler(async (req, res) => {
+    console.log("--- leadsController.list ---");
+    console.log("Query:", req.query);
+
     const { role, id } = req.user;
+
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit =
+      req.query.noLimit === "true"
+        ? Number.MAX_SAFE_INTEGER
+        : parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Extract filter parameters
     const {
       priority,
       status,
@@ -381,47 +518,62 @@ assignedTo,
 
     let query = { role: "user" };
 
-    // Role-based query
     if (role === "Sub-Admin") {
-      const subAdmin = await User.findById(id).populate('assignedAgents', 'id');
-      const agentIds = subAdmin.assignedAgents.map(agent => agent.id);
-      query = {
-        role: "user",
-        $or: [
-          { createdBy: id },
-          { assignedTo: id },
-          { createdBy: { $in: agentIds } },
-          { assignedTo: { $in: agentIds } },
-        ],
-      };
-    } else if(role === "Agent") {
-            query = { role: "user", $or: [{ createdBy: id }, { assignedTo: id }] };
-    } else { // Agent and other roles
-      query = { role: "user" };
+      const subAdmin = await User.findById(id).populate(
+        "assignedAgents",
+        "id"
+      );
+      const agentIds = (subAdmin?.assignedAgents || []).map((a) => a.id);
+
+      query.$or = [
+        { createdBy: new mongoose.Types.ObjectId(id) },
+        { assignedTo: new mongoose.Types.ObjectId(id) },
+        {
+          createdBy: {
+            $in: agentIds.map((aid) => new mongoose.Types.ObjectId(aid)),
+          },
+        },
+        {
+          assignedTo: {
+            $in: agentIds.map((aid) => new mongoose.Types.ObjectId(aid)),
+          },
+        },
+      ];
+    } else if (role === "Agent") {
+      query.$or = [
+        { createdBy: new mongoose.Types.ObjectId(id) },
+        { assignedTo: new mongoose.Types.ObjectId(id) },
+      ];
     }
 
-    // Apply filters
-    if (
-      priority &&
-      ["hot", "warm", "cold", "Not Assigned"].includes(priority)
-    ) {
+    if (priority && ["hot", "warm", "cold", "Not Assigned"].includes(priority)) {
       query.priority = priority;
     }
-    if (filterleads === "Assigned") {
-      query.assignedTo = { $exists: true, $ne: null };
-    } else if (filterleads === "Unassigned") {
-      query.assignedTo = { $exists: false };
-    }
+
+if (filterleads === "Assigned")
+    filters.assignedTo = { $exists: true, $ne: null };
+else if (filterleads === "Unassigned")
+    filters.assignedTo = { $exists: false };
+
+
     if (searchText) {
-      query.name = { $regex: searchText, $options: "i" };
+      query.$or = [
+        { name: { $regex: searchText, $options: "i" } },
+        { mobile: { $regex: searchText, $options: "i" } },
+      ];
     }
-    //............savio changed.....
+
+    if (status && ["open", "converted", "rejected"].includes(status)) {
+      query.status = status;
+    }
+
+    // Date filters
     if (startDate && endDate) {
       const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        query.createdAt = { $gte: start, $lte: end };
+      const endD = new Date(endDate);
+      if (!isNaN(start) && !isNaN(endD)) {
+        endD.setHours(23, 59, 59, 999);
+        query.createdAt = { $gte: start, $lte: endD };
       }
     } else if (date === "today") {
       const today = new Date();
@@ -431,179 +583,305 @@ assignedTo,
         $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
       };
     } else if (date === "yesterday") {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      yesterday.setHours(0, 0, 0, 0);
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      y.setHours(0, 0, 0, 0);
       query.createdAt = {
-        $gte: yesterday,
-        $lt: new Date(yesterday.getTime() + 24 * 60 * 60 * 1000),
+        $gte: y,
+        $lt: new Date(y.getTime() + 24 * 60 * 60 * 1000),
       };
     } else if (date === "custom" && startDate) {
-      const customDate = new Date(startDate);
-      customDate.setHours(0, 0, 0, 0);
+      const c = new Date(startDate);
+      c.setHours(0, 0, 0, 0);
       query.createdAt = {
-        $gte: customDate,
-        $lt: new Date(customDate.getTime() + 24 * 60 * 60 * 1000),
+        $gte: c,
+        $lt: new Date(c.getTime() + 24 * 60 * 60 * 1000),
       };
     }
 
-    // Sorting
-    let sort = { createdAt: -1 }; // Default sort by createdAt descending
-    if (sortBy === "ascleadvalue") {
-      sort = { leadvalue: 1 };
-    } else if (sortBy === "descleadvalue") {
-      sort = { leadvalue: -1 };
-    }
+    let sort = { createdAt: -1 };
+    if (sortBy === "ascleadvalue") sort = { leadvalue: 1 };
+    else if (sortBy === "descleadvalue") sort = { leadvalue: -1 };
 
     const total = await User.countDocuments(query);
-    let leadsQuery = User.find(query)
-      .populate("createdBy", "name")
-      .populate("assignedLeads","name")
-      .populate("assignedTo", "name")
-      .populate("updatedBy", "name")
-      .populate("nextfollowupupdatedBy", "role name")
-      .populate("source")
-      .populate("userDetails.leadFormId", "name type options ")
-      .sort(sort);
 
-    if (req.query.noLimit !== 'true') {
-      leadsQuery = leadsQuery.skip(skip).limit(limit);
+    const aggregationPipeline = [
+      { $match: query },
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: "users",
+          localField: "createdBy",
+          foreignField: "_id",
+          as: "createdByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedTo",
+          foreignField: "_id",
+          as: "assignedToUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "updatedBy",
+          foreignField: "_id",
+          as: "updatedByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "nextfollowupupdatedBy",
+          foreignField: "_id",
+          as: "nextfollowupupdatedByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "settings",
+          localField: "source",
+          foreignField: "_id",
+          as: "sourceDetails",
+        },
+      },
+      { $unwind: { path: "$createdByUser", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$assignedToUser", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$updatedByUser", preserveNullAndEmptyArrays: true } },
+      {
+        $unwind: {
+          path: "$nextfollowupupdatedByUser",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      { $unwind: { path: "$sourceDetails", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          name: 1,
+          email: 1,
+          mobile: 1,
+          location: 1,
+          interestedproduct: 1,
+          leadvalue: 1,
+          role: 1,
+          status: 1,
+          whatsapp: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          priority: 1,
+          nextFollowUp: 1,
+          createdBy: {
+            _id: "$createdByUser._id",
+            name: "$createdByUser.name",
+          },
+          assignedTo: {
+            _id: "$assignedToUser._id",
+            name: "$assignedToUser.name",
+            role: "$assignedToUser.role",
+          },
+          updatedBy: {
+            _id: "$updatedByUser._id",
+            name: "$updatedByUser.name",
+          },
+          nextfollowupupdatedBy: {
+            _id: "$nextfollowupupdatedByUser._id",
+            role: "$nextfollowupupdatedByUser.role",
+            name: "$nextfollowupupdatedByUser.name",
+          },
+          source: "$sourceDetails",
+          userDetails: 1,
+        },
+      },
+    ];
+
+    const leads = await User.aggregate(aggregationPipeline);
+    console.log(leads,"hjgjgfj")
+
+    let agentSubAdminDetails = null;
+    if (role === "Agent") {
+      const agent = await User.findById(id)
+        .populate("assignedTo", "name role email mobile")
+        .select("assignedTo");
+      agentSubAdminDetails = agent?.assignedTo || null;
     }
-
-    const leads = await leadsQuery;
 
     const leadforms = await Leadform.find();
 
     res.status(200).json({
       leads,
       leadforms,
-      currentPage: req.query.noLimit === 'true' ? 1 : page,
-      totalPages: req.query.noLimit === 'true' ? 1 : Math.ceil(total / limit),
+      subAdmin: agentSubAdminDetails,
+      currentPage: req.query.noLimit === "true" ? 1 : page,
+      totalPages:
+        req.query.noLimit === "true" ? 1 : Math.ceil(total / limit),
       totalLeads: total,
     });
   }),
 
+  // ========= 7. UPDATE LEAD STATUS (with transaction) =========
   update_status: asynchandler(async (req, res) => {
+    console.log("--- leadsController.update_status ---");
+    console.log("Params:", req.params);
+    console.log("Body:", req.body);
+
     const { id } = req.params;
     const { status } = req.body;
     const userId = req.user?.id;
 
-    const lead = await User.findById(id);
-    const customerExists = await Customer.findOne({ leadId: id });
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    if (!lead) {
-      return res.status(400).json({ message: "Lead not found" });
-    }
-
-    if (status === "converted") {
-      let customerstatus = null;
-      customerstatus = await Setting.findOne({
-        title: status,
-        type: "customer-status",
-      });
-
-      if (!customerExists) {
-        const newcustomer = await Customer.create({
-          name: lead.name,
-          mobile: lead.mobile,
-          leadId: id,
-
-          alternativemobile: lead.whatsappNumber,
-          email: lead.email || null,
-          payment: "pending",
-          status: customerstatus ? customerstatus._id : null,
-          isActive: false,
-          createdBy: userId,
-          whatsapp: lead.whatsapp,
-        });
+    try {
+      const lead = await User.findById(id).session(session);
+      if (!lead) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ message: "Lead not found" });
       }
-    } else {
-      if (customerExists) {
-        await Customer.findByIdAndDelete(customerExists._id);
+
+      if (status === "converted") {
+        const customerExists = await Customer.findOne({ leadId: id }).session(
+          session
+        );
+        if (!customerExists) {
+          const customerstatus = await Setting.findOne({
+            title: status,
+            type: "customer-status",
+          }).session(session);
+
+          await Customer.create(
+            [
+              {
+                name: lead.name,
+                mobile: lead.mobile,
+                leadId: id,
+                alternativemobile: lead.whatsapp, // fixed from whatsappNumber
+                email: lead.email || null,
+                payment: "pending",
+                status: customerstatus ? customerstatus._id : null,
+                isActive: false,
+                createdBy: userId,
+                whatsapp: lead.whatsapp,
+              },
+            ],
+            { session }
+          );
+        }
+      } else {
+        const customerExists = await Customer.findOne({ leadId: id }).session(
+          session
+        );
+        if (customerExists) {
+          await Customer.findByIdAndDelete(customerExists._id).session(
+            session
+          );
+        }
       }
-    }
 
-    const convertedLead = await User.findByIdAndUpdate(
-      id,
-      { status, updatedBy: userId },
-      { runValidators: true, new: true }
-    );
+      const convertedLead = await User.findByIdAndUpdate(
+        id,
+        { status, updatedBy: userId },
+        { runValidators: true, new: true }
+      ).session(session);
 
-    const updater = await User.findById(userId);
-    const admin = await User.findOne({ role: "Admin" });
+      await session.commitTransaction();
+      session.endSession();
 
-    const notificationRecipients = [];
+      // Notifications after transaction
+      const updater = await User.findById(userId);
+      const admin = await User.findOne({ role: "Admin" });
 
-    // Always notify the user who updated
-    notificationRecipients.push({
-      user: userId,
-      title: "Lead Status Updated",
-      message: `You updated status of ${lead.name} to ${convertedLead.status}`,
-      isRead: false,
-    });
+      const notificationRecipients = [];
 
-    // Always notify Admin (if updater is not admin)
-    if (admin && admin._id.toString() !== userId) {
+      // Notify updater
       notificationRecipients.push({
-        user: admin._id,
+        user: userId,
         title: "Lead Status Updated",
-        message: `Status of ${lead.name} updated to ${convertedLead.status} by ${updater.name}`,
+        message: `You updated status of ${lead.name} to ${convertedLead.status}`,
         isRead: false,
       });
-    }
 
-    // Notify lead owner (staff assigned to the lead)
-    if (lead.createdBy && lead.createdBy.toString() !== userId) {
-      notificationRecipients.push({
-        user: lead.createdBy,
-        title: "Lead Status Updated",
-        message: `Status of ${lead.name} updated to ${convertedLead.status}`,
-        isRead: false,
-      });
-    }
-
-    // If updater is Agent, notify their assigned subadmin
-    if (updater.role === "Agent" && updater.assignedTo) {
-      const subadmin = await User.findById(updater.assignedTo);
-      if (subadmin && subadmin._id.toString() !== userId) {
+      // Notify Admin if updater is not admin
+      if (admin && admin._id.toString() !== userId) {
         notificationRecipients.push({
-          user: subadmin._id,
+          user: admin._id,
           title: "Lead Status Updated",
-          message: `Status of ${lead.name} updated to ${convertedLead.status} by your agent`,
+          message: `Status of ${lead.name} updated to ${convertedLead.status} by ${updater.name}`,
           isRead: false,
         });
       }
-    }
 
-    // NEW: If updater is Subadmin, notify agents assigned to this subadmin
-    // Notify the agent assigned to the lead, if any
-    if (lead.assignedTo) {
-      const assignedAgent = await User.findById(lead.assignedTo);
-      if (
-        assignedAgent &&
-        assignedAgent._id.toString() !== userId &&
-        !notificationRecipients.some(
-          (n) => n.user.toString() === assignedAgent._id.toString()
-        )
-      ) {
+      // Notify lead owner (creator)
+      if (lead.createdBy && lead.createdBy.toString() !== userId) {
         notificationRecipients.push({
-          user: assignedAgent._id,
+          user: lead.createdBy,
           title: "Lead Status Updated",
           message: `Status of ${lead.name} updated to ${convertedLead.status}`,
           isRead: false,
         });
       }
+
+      // If updater is Agent, notify their Sub-Admin
+      if (updater.role === "Agent" && updater.assignedTo) {
+        const subadmin = await User.findById(updater.assignedTo);
+        if (subadmin && subadmin._id.toString() !== userId) {
+          notificationRecipients.push({
+            user: subadmin._id,
+            title: "Lead Status Updated",
+            message: `Status of ${lead.name} updated to ${convertedLead.status} by your agent`,
+            isRead: false,
+          });
+        }
+      }
+
+      // Notify assigned agent of this lead
+      if (lead.assignedTo) {
+        const assignedAgent = await User.findById(lead.assignedTo);
+        if (
+          assignedAgent &&
+          assignedAgent._id.toString() !== userId &&
+          !notificationRecipients.some(
+            (n) => n.user.toString() === assignedAgent._id.toString()
+          )
+        ) {
+          notificationRecipients.push({
+            user: assignedAgent._id,
+            title: "Lead Status Updated",
+            message: `Status of ${lead.name} updated to ${convertedLead.status}`,
+            isRead: false,
+          });
+        }
+      }
+
+      await Notification.create(notificationRecipients);
+
+      res.status(200).json({ message: "Status updated successfully" });
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      console.error("Error updating status:", error);
+      res
+        .status(500)
+        .json({ message: "Error updating status", error: error.message });
     }
-
-    await Notification.create(notificationRecipients);
-
-    res.status(200).json({ message: "Status updated successfully" });
   }),
 
+  // ========= 8. OPEN LEADS LIST =========
   list_openleads: asynchandler(async (req, res) => {
+    console.log("--- leadsController.list_openleads ---");
+    console.log("Query:", req.query);
+
     const { id, role } = req.user;
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit =
+      req.query.noLimit === "true"
+        ? Number.MAX_SAFE_INTEGER
+        : parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
     const {
@@ -614,40 +892,49 @@ assignedTo,
       startDate,
       endDate,
       sortBy,
+      filterleads,
     } = req.query;
 
-    let query = { role: "user" };
+    let query = { role: "user", status: "open" };
 
-    // Role-based query
+    // Role-based restrictions
     if (role === "Admin") {
-      query = { role: "user", status: "open" };
+      // see all
     } else if (role === "Sub-Admin") {
       const subAdmin = await User.findById(id);
-      const agentIds = subAdmin.assignedAgents || [];
-      query = {
-        role: "user",
-        status: "open",
-        $or: [
-          { createdBy: id },
-          { assignedTo: id },
-          { assignedTo: { $in: agentIds } },
-        ],
-      };
+      const agentIds = subAdmin?.assignedAgents || [];
+      query.$or = [
+        { createdBy: id },
+        { assignedTo: id },
+        { assignedTo: { $in: agentIds } },
+      ];
     } else {
-      query = { role: "user", status: "open", assignedTo: id };
+      // Agents
+      query.assignedTo = id;
     }
 
     if (priority && ["hot", "warm", "cold", "Lukewarm"].includes(priority)) {
       query.priority = priority;
     }
-    if (req.query.noLimit === 'true') {
-      delete query.assignedTo; // Explicitly remove assignedTo filter if noLimit is true
-    } else if (assignedTo && filterleads !== "All") { // Apply assignedTo filter only if filterleads is not "All"
+
+    // noLimit / assignedTo filter
+    if (req.query.noLimit === "true") {
+      // remove assignedTo restriction if any
+      if (query.assignedTo && role === "Agent") {
+        delete query.assignedTo;
+      }
+    } else if (assignedTo && filterleads !== "All") {
       query.assignedTo = assignedTo;
     }
+
     if (searchText) {
-      query.name = { $regex: searchText, $options: "i" };
+      query.$or = [
+        { name: { $regex: searchText, $options: "i" } },
+        { mobile: { $regex: searchText, $options: "i" } },
+      ];
     }
+
+    // Date filters
     if (date === "today") {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -672,20 +959,17 @@ assignedTo,
       };
     } else if (date === "range" && startDate && endDate) {
       const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        query.createdAt = { $gte: start, $lte: end };
+      const endD = new Date(endDate);
+      if (!isNaN(start.getTime()) && !isNaN(endD.getTime())) {
+        endD.setHours(23, 59, 59, 999);
+        query.createdAt = { $gte: start, $lte: endD };
       }
     }
 
-    // Sorting
-    let sort = { createdAt: -1 }; // Default sort by createdAt descending
-    if (sortBy === "ascleadvalue") {
-      sort = { leadvalue: 1 };
-    } else if (sortBy === "descleadvalue") {
-      sort = { leadvalue: -1 };
-    }
+    // Sort
+    let sort = { createdAt: -1 };
+    if (sortBy === "ascleadvalue") sort = { leadvalue: 1 };
+    else if (sortBy === "descleadvalue") sort = { leadvalue: -1 };
 
     const total = await User.countDocuments(query);
     const leads = await User.find(query)
@@ -709,15 +993,21 @@ assignedTo,
     });
   }),
 
+  // ========= 9. UPDATE PRIORITY =========
   update_priority: asynchandler(async (req, res) => {
+    console.log("--- leadsController.update_priority ---");
+    console.log("Params:", req.params);
+    console.log("Body:", req.body);
+
     const { id } = req.params;
     const { priority } = req.body;
-    const customer = await User.findById(id);
-    if (!customer) {
-      return res.status(400).json({ message: "Customer not found" });
+
+    const lead = await User.findById(id);
+    if (!lead) {
+      return res.status(400).json({ message: "Lead not found" });
     }
 
-    const updatedPriority = await User.findByIdAndUpdate(
+    await User.findByIdAndUpdate(
       id,
       { priority },
       { runValidators: true, new: true }
@@ -726,7 +1016,12 @@ assignedTo,
     res.status(200).json({ message: "Priority updated successfully" });
   }),
 
+  // ========= 10. UPDATE LEAD DETAILS =========
   update_details: asynchandler(async (req, res) => {
+    console.log("--- leadsController.update_details ---");
+    console.log("Params:", req.params);
+    console.log("Body:", req.body);
+
     const { id } = req.params;
     const {
       name,
@@ -737,96 +1032,96 @@ assignedTo,
       interestedproduct,
       leadvalue,
       whatsapp,
-      userDetails, // full array update
-      leadFormId, // single item update
-      newValue, // new value for that item
+      userDetails,
+      leadFormId,
+      newValue,
     } = req.body;
 
-    // Find customer
-    const customer = await User.findById(id);
-    if (!customer)
-      return res.status(404).json({ message: "Customer not found" });
-
-    // Check duplicate email
-    if (email && email !== customer.email) {
-      const existingEmail = await User.findOne({ email });
-      if (existingEmail)
-        return res.status(400).json({ message: "Email already exists" });
-      customer.email = email;
+    const lead = await User.findById(id);
+    if (!lead) {
+      return res.status(404).json({ message: "Lead not found" });
     }
 
-    // Check duplicate mobile
-    if (mobile && mobile !== customer.mobile) {
+    // email duplicate check
+    if (email && email !== lead.email) {
+      const existingEmail = await User.findOne({ email });
+      if (existingEmail) {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+      lead.email = email;
+    }
+
+    // mobile duplicate check
+    if (mobile && mobile !== lead.mobile) {
       const existingMobile = await User.findOne({ mobile });
-      if (existingMobile)
+      if (existingMobile) {
         return res
           .status(400)
           .json({ message: "Mobile number already exists" });
-      customer.mobile = mobile;
+      }
+      lead.mobile = mobile;
     }
 
-    // Update basic fields
-    if (name) customer.name = name;
-    if (location) customer.location = location;
-    if (interestedproduct) customer.interestedproduct = interestedproduct;
-    if (leadvalue) customer.leadvalue = leadvalue;
-    if (whatsapp) customer.whatsapp = whatsapp;
+    if (name) lead.name = name;
+    if (location) lead.location = location;
+    if (interestedproduct) lead.interestedproduct = interestedproduct;
+    if (leadvalue) lead.leadvalue = leadvalue;
+    if (whatsapp) lead.whatsapp = whatsapp;
 
-    // Validate and update source
     if (source) {
       const leadSourceSetting = await Setting.findOne({
         title: source,
         type: "lead-sources",
       });
-      if (!leadSourceSetting)
+      if (!leadSourceSetting) {
         return res.status(400).json({ message: "Invalid source" });
-      customer.source = leadSourceSetting._id;
+      }
+      lead.source = leadSourceSetting._id;
     }
 
-    // Full array replacement
     if (userDetails && Array.isArray(userDetails)) {
       const validData = userDetails.map((item) => ({
         leadFormId: new mongoose.Types.ObjectId(item.leadFormId),
         value: item.value,
       }));
-      customer.userDetails = validData;
+      lead.userDetails = validData;
     }
 
-    // 🔹 Update single userDetails item (if leadFormId + newValue provided)
     if (leadFormId && newValue) {
-      const index = customer.userDetails.findIndex(
+      const index = lead.userDetails.findIndex(
         (item) => item.leadFormId.toString() === leadFormId.toString()
       );
 
       if (index !== -1) {
-        customer.userDetails[index].value = newValue;
+        lead.userDetails[index].value = newValue;
       } else {
-        // optional: add new if not found
-        customer.userDetails.push({
+        lead.userDetails.push({
           leadFormId: new mongoose.Types.ObjectId(leadFormId),
           value: newValue,
         });
       }
     }
 
-    // saviyo changed the ...........................................................................
-    customer.updatedBy =req.user.id;
+    lead.updatedBy = req.user.id;
 
-    // Save changes
-    await customer.save();
+    await lead.save();
 
-    // Return populated data
-    const updatedCustomer = await User.findById(id).populate(
+    const updatedLead = await User.findById(id).populate(
       "userDetails.leadFormId"
     );
 
     res.status(200).json({
-      message: "Customer updated successfully",
-      updatedCustomer,
+      message: "Lead updated successfully",
+      updatedLead,
     });
   }),
 
+  // ========= 11. SET NEXT FOLLOW-UP =========
   set_nextfollowup: asynchandler(async (req, res) => {
+    console.log("--- leadsController.set_nextfollowup ---");
+    console.log("Params:", req.params);
+    console.log("Body:", req.body);
+
     const { id } = req.params;
     const { nextFollowUp } = req.body;
     const userId = req.user?.id;
@@ -835,11 +1130,13 @@ assignedTo,
     if (!lead) {
       return res.status(400).json({ message: "Lead does not exists" });
     }
+
     const setnextFollowup = await User.findByIdAndUpdate(
       id,
       { nextFollowUp, nextfollowupupdatedBy: userId },
       { runValidators: true, new: true }
     ).populate("nextfollowupupdatedBy", "role name");
+
     res.status(200).json({ setnextFollowup });
 
     if (setnextFollowup && nextFollowUp) {
@@ -848,7 +1145,6 @@ assignedTo,
 
       const notificationRecipients = [];
 
-      // Always notify the updater
       notificationRecipients.push({
         user: userId,
         title: "Next Follow-up Set",
@@ -856,7 +1152,6 @@ assignedTo,
         isRead: false,
       });
 
-      // Notify Admin (if not the updater)
       if (admin && admin._id.toString() !== userId) {
         notificationRecipients.push({
           user: admin._id,
@@ -866,7 +1161,6 @@ assignedTo,
         });
       }
 
-      // Notify lead owner (staff who created the lead)
       if (lead.createdBy && lead.createdBy.toString() !== userId) {
         notificationRecipients.push({
           user: lead.createdBy,
@@ -876,7 +1170,6 @@ assignedTo,
         });
       }
 
-      // Notify the agent assigned to the lead
       if (lead.assignedTo) {
         const assignedAgent = await User.findById(lead.assignedTo);
         if (
@@ -895,7 +1188,6 @@ assignedTo,
         }
       }
 
-      // If updater is Agent, notify their subadmin
       if (updater.role === "Agent" && updater.assignedTo) {
         const subadmin = await User.findById(updater.assignedTo);
         if (
@@ -917,68 +1209,65 @@ assignedTo,
       await Notification.create(notificationRecipients);
     }
   }),
+
+  // ========= 12. UPDATE USER LEAD FORM (Lead or Customer) =========
   update_userleadform: asynchandler(async (req, res) => {
-  const { id } = req.params;
-  const userDetails = req.body;
-  const fileUrl = req.files?.[0]?.path;
+    console.log("--- leadsController.update_userleadform ---");
+    console.log("Params:", req.params);
+    console.log("Body:", req.body);
 
-  // Try finding in User collection
-  let user = await User.findById(id);
-  let customer = null;
+    const { id } = req.params;
+    const userDetails = req.body;
+    const fileUrl = req.files?.[0]?.path;
 
-  // If not found in User, check in Customer
-  if (!user) {
-    customer = await Customer.findById(id);
-    if (!customer) {
-      return res.status(404).json({ message:  "Customer not found" });
+    let lead = await User.findById(id);
+    let customer = null;
+
+    if (!lead) {
+      customer = await Customer.findById(id);
+      if (!customer) {
+        return res.status(404).json({ message: "Record not found" });
+      }
     }
-  }
 
-  // Prepare data array
-  const data = Object.keys(userDetails).map((key) => ({
-    leadFormId: key,
-    value: userDetails[key],
-  }));
+    const data = Object.keys(userDetails).map((key) => ({
+      leadFormId: key,
+      value: userDetails[key],
+    }));
 
-  // If there’s a file uploaded, add it to data
-  if (fileUrl) {
-    data.push({
-      leadFormId: req.files[0].fieldname,
-      value: fileUrl,
+    if (fileUrl) {
+      data.push({
+        leadFormId: req.files[0].fieldname,
+        value: fileUrl,
+      });
+    }
+
+    let updatedRecord;
+    if (lead) {
+      lead.userDetails = data;
+      updatedRecord = await lead.save();
+    } else {
+      customer.userDetails = data;
+      updatedRecord = await customer.save();
+    }
+
+    const leadforms = await Leadform.find();
+
+    res.status(200).json({
+      message: "User lead form updated successfully",
+      updatedRecord,
+      leadforms,
     });
-  }
+  }),
 
-  let updatedRecord;
-
-  if (user) {
-    // Update user
-    user.userDetails = data;
-    updatedRecord = await user.save();
-  } else if (customer) {
-    // Update customer
-    customer.userDetails = data;
-    updatedRecord = await customer.save();
-  }
-
-  const leadforms = await Leadform.find();
-
-  res.status(200).json({
-    message: "User lead form updated successfully",
-    updatedRecord,
-    leadforms,
-  });
-}),
-
-
+  // ========= 13. CSV BULK UPLOAD LEADS =========
   upload_csvbulkleads: asynchandler(async (req, res) => {
-    // This endpoint is accessible to all authenticated roles.
+    console.log("--- leadsController.upload_csvbulkleads ---");
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const userName = req.user?.name;
     const userID = req.user?.id;
-
     const leads = [];
 
     fs.createReadStream(req.file.path)
@@ -1004,24 +1293,30 @@ assignedTo,
           location: normalizedRow.location || "",
           interestedproduct: normalizedRow.interestedproduct || "",
           leadvalue: normalizedRow.leadvalue || "",
-          role: "user",
           whatsapp: normalizedRow.whatsapp,
-          assignedto: normalizedRow.assignedto || "", // Add assignedto field
+          assignedto: normalizedRow.assignedto || "",
         });
       })
       .on("end", async () => {
         try {
-          const createdByUser = await User.findOne({ name: userName });
+          const createdByUser = await User.findById(userID);
           if (!createdByUser) {
-            return res.status(404).json({ message: "Creator user not found" });
+            return res
+              .status(404)
+              .json({ message: "Creator user not found" });
           }
 
           const processedLeads = [];
 
+          // Pre-check duplicates by mobile
+          const existingMobiles = (
+            await User.find({
+              mobile: { $in: leads.map((l) => l.mobile) },
+            }).select("mobile")
+          ).map((l) => l.mobile);
+
           for (const lead of leads) {
-            // Check for duplicate mobile
-            const existingLead = await User.findOne({ mobile: lead.mobile });
-            if (existingLead) {
+            if (existingMobiles.includes(lead.mobile)) {
               console.warn(
                 `Skipping lead with mobile ${lead.mobile} due to duplicate.`
               );
@@ -1041,9 +1336,12 @@ assignedTo,
               }
             }
 
+            // Determine assignedTo
             let assignedTo = null;
             if (lead.assignedto) {
-              const assignedToUser = await User.findOne({ name: lead.assignedto });
+              const assignedToUser = await User.findOne({
+                name: lead.assignedto,
+              });
               if (assignedToUser) {
                 assignedTo = assignedToUser._id;
               } else {
@@ -1052,8 +1350,11 @@ assignedTo,
                 );
               }
             } else {
-              // If no assignedto in CSV, use the uploader's role for assignment
-              if (createdByUser.role === "Agent" || createdByUser.role === "Sub-Admin") {
+              // If not set in CSV, assign based on uploader's role
+              if (
+                createdByUser.role === "Agent" ||
+                createdByUser.role === "Sub-Admin"
+              ) {
                 assignedTo = createdByUser._id;
               }
             }
@@ -1067,22 +1368,23 @@ assignedTo,
               location: lead.location,
               interestedproduct: lead.interestedproduct,
               leadvalue: lead.leadvalue,
-              role: lead.role,
+              role: "user",
               whatsapp: lead.whatsapp,
-              assignedTo: assignedTo, // Assign the determined assignedTo value
+              assignedTo,
             });
           }
 
           if (processedLeads.length === 0) {
             return res.status(400).json({
-              message: "No valid leads to upload after filtering duplicates",
+              message:
+                "No valid leads to upload after filtering duplicates or invalid rows",
             });
           }
 
           await User.insertMany(processedLeads, { ordered: false });
           fs.unlinkSync(req.file.path);
 
-          // Notification logic
+          // Notifications
           const notificationRecipients = [];
           notificationRecipients.push({
             user: userID,
@@ -1125,16 +1427,22 @@ assignedTo,
         } catch (err) {
           console.error(err);
           res.status(500).json({
-            message: "Error uploading leads. Ensure mobile numbers are unique.",
+            message:
+              "Error uploading leads. Ensure mobile numbers are unique.",
           });
         }
       });
   }),
 
+  // ========= 14. CSV TEMPLATE DOWNLOAD =========
   download_csvtemplate: asynchandler(async (req, res) => {
+    console.log("--- leadsController.download_csvtemplate ---");
+
     const csvHeaders =
       "Name,Mobile,Source,Location,Interestedproducts,Leadvalue,Assignedto\n";
-    const sampleRow = "John Doe,Naukri,Thrissur,BCA,20000,AgentName\n";
+    const sampleRow =
+      "John Doe,9876543210,Naukri,Thrissur,BCA,20000,AgentName\n";
+
     const csvData = csvHeaders + sampleRow;
 
     res.setHeader("Content-Type", "text/csv");
@@ -1145,20 +1453,38 @@ assignedTo,
     res.status(200).send(csvData);
   }),
 
+  // ========= 15. VIEW PDF FROM CLOUDINARY =========
   view_pdf: asynchandler(async (req, res) => {
-    const cloudinaryUrl = req.query.url;
+    console.log("--- leadsController.view_pdf ---");
+    console.log("Query:", req.query);
 
+    const cloudinaryUrl = req.query.url;
     if (!cloudinaryUrl) {
       return res.status(400).send("Missing URL parameter");
     }
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline"); // Force inline display
-    response.data.pipe(res); // Stream the PDF data to the client
+    try {
+      const response = await axios({
+        method: "get",
+        url: cloudinaryUrl,
+        responseType: "stream",
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", "inline");
+      response.data.pipe(res);
+    } catch (error) {
+      console.error("Error fetching PDF from Cloudinary:", error);
+      res.status(500).send("Error fetching PDF");
+    }
   }),
 
+  // ========= 16. DELETE MULTIPLE LEADS =========
   delete_multipleleads: asynchandler(async (req, res) => {
-    const { leadIds } = req.body; // Expecting an array of lead IDs in the request body
+    console.log("--- leadsController.delete_multipleleads ---");
+    console.log("Body:", req.body);
+
+    const { leadIds } = req.body;
 
     if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {
       return res
@@ -1166,7 +1492,6 @@ assignedTo,
         .json({ message: "Lead IDs are required and must be an array" });
     }
 
-    // Validate that all IDs are valid ObjectIds
     const { ObjectId } = require("mongoose").Types;
     const invalidIds = leadIds.filter((id) => !ObjectId.isValid(id));
     if (invalidIds.length > 0) {
@@ -1175,24 +1500,26 @@ assignedTo,
         .json({ message: `Invalid lead IDs: ${invalidIds.join(", ")}` });
     }
 
-    // Delete leads with the provided IDs
     const result = await User.deleteMany({
       _id: { $in: leadIds },
-      role: "user", // Ensure only leads (role: 'user') are deleted
+      role: "user", // ensure only leads deleted
     });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({ message: "No leads found to delete" });
     }
 
-    res
-      .status(200)
-      .json({ message: `${result.deletedCount} lead(s) deleted successfully` });
+    res.status(200).json({
+      message: `${result.deletedCount} lead(s) deleted successfully`,
+    });
   }),
 
+  // ========= 17. DELETE ALL LEADS (ADMIN ONLY) =========
   deleteAllLeads: asynchandler(async (req, res) => {
     if (req.user.role !== "Admin") {
-      return res.status(403).json({ message: "Forbidden: Only Admin users can delete all leads." });
+      return res.status(403).json({
+        message: "Forbidden: Only Admin users can delete all leads.",
+      });
     }
 
     const result = await User.deleteMany({ role: "user" });
@@ -1201,30 +1528,10 @@ assignedTo,
       return res.status(404).json({ message: "No leads found to delete." });
     }
 
-    res.status(200).json({ message: `${result.deletedCount} leads deleted successfully.` });
+    res.status(200).json({
+      message: `${result.deletedCount} leads deleted successfully.`,
+    });
   }),
-
-  // removeRejectedFollowup : async (req, res) => {
-  //   try {
-  //     const lead = await Leadform.findById(req.params.id);
-
-  //     if (!lead) return res.status(404).json({ message: "Lead not found" });
-
-  //     // Keep only non-rejected
-  //     lead.followups = lead.followups.filter(fs => fs.status !== "rejected");
-
-  //     await lead.save();
-
-  //     res.json({ message: "Rejected follow-ups removed successfully" });
-  //   } catch (error) {
-  //     res.status(500).json({ message: error.message });
-  //   }
-  // }
 };
 
 module.exports = leadsController;
-
-
-
-
-//  saviyo......................
