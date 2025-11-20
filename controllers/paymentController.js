@@ -8,6 +8,7 @@ const Payments = require("../models/PaymentSchemas");
 
 const paymentController = {
   AddPayment: expressAsyncHandler(async (req, res) => {
+    console.log("--- ADD PAYMENT CONTROLLER HIT ---");
     try {
       const {
         productId,
@@ -16,7 +17,10 @@ const paymentController = {
         transactionDate,
         paymentMode,
         transactionRecordBy,
+        receiptUrl
       } = req.body;
+      console.log("req.body",req.body)
+
       // 🔹 Step 1: Validate required fields
       if (
         !productId ||
@@ -28,15 +32,21 @@ const paymentController = {
         return res.status(400).json({
           success: false,
           message: "Please provide all required fields.",
-      
-        customerId,
-        paidAmount,
-        transactionDate,
-        paymentMode,
-        transactionRecordBy,
-        productId,
+
+          customerId,
+          paidAmount,
+          transactionDate,
+          paymentMode,
+          transactionRecordBy,
+          productId,
         });
       }
+    if (!receiptUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "Receipt upload not successful.",
+      });
+    }
 
       const [product, gst, customer] = await Promise.all([
         Setting.findById(productId),
@@ -81,7 +91,7 @@ const paymentController = {
       if (payment.totalPaid + paidAmount > totalAmount) {
         return res.status(400).json({
           success: false,
-          message: "Paid amount cannot exceed the total amount.",
+          message: "Check the Amount.",
         });
       }
 
@@ -100,6 +110,7 @@ const paymentController = {
         transactionRecordBy,
         transactionDate,
         paymentMode,
+        receiptUrl
       });
 
       // 🔹 Step 8: Update payment and customer status
@@ -135,7 +146,8 @@ const paymentController = {
     const productId = req.params.id;
     const customerList = await Customer.find({ product: productId })
       .populate("payment")
-      .populate("customer").select("name _id")
+      .populate("customer")
+      .select("name _id")
       .populate("transactions");
 
     if (!customerList) {
@@ -146,28 +158,42 @@ const paymentController = {
       customerList,
     });
   }),
-    getPayments: expressAsyncHandler(async (req, res) => {
-    const { startDate, endDate } = req.query;
+  getCustomerPayments: expressAsyncHandler(async (req, res) => {
+    console.log("--- GET CUSTOMER PAYMENTS CONTROLLER HIT ---");
+    const reqId = req.params.id;
+    console.log("Customer ID Received:", reqId);
+    
+    const allPayment = await Payment.findOne({ customer: reqId })
+      .populate("customer", "name")
+      .populate("product", "title");
 
-    const dateFilter = {};
-    if (startDate && endDate) {
-      dateFilter.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
+    if (!allPayment) {
+      // Return a successful response with a clear message and empty data
+      return res.status(200).json({
+        message: "No payment details found for this customer.",
+        allPayment: null,
+      });
     }
 
-    const allPayment = await Payments.find(dateFilter).populate("customer", "name").populate("transactions", "paidAmount");
+    return res.status(200).json({
+      message: "Payment details fetched successfully.",
+      allPayment,
+    });
+  }),
+  getPayments: expressAsyncHandler(async (req, res) => {
+    const allPayment = await Payments.find()
+      .populate("customer", "name")
+      .populate("transactions", "paidAmount");
 
     if (!allPayment) {
       return res.status(404).send("payment not found");
     }
-    console.log(allPayment)
+    console.log(allPayment);
     return res.status(200).json({
-        message : "All payment",
-        allPayment
+      message: "All payment",
+      allPayment,
     });
-   }),
+  }),
   getAll: expressAsyncHandler(async (req, res) => {
     const getAll = await Transaction.find().populate({
       path: "payment",
@@ -185,20 +211,10 @@ const paymentController = {
     });
   }),
   getProductPaymentDetails: expressAsyncHandler(async (req, res) => {
-    const { startDate, endDate } = req.query;
-
-    const dateFilter = {};
-    if (startDate && endDate) {
-      dateFilter.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
-    }
-
-    const getProductPayment = await Transaction.find(dateFilter)
+    const getProductPayment = await Transaction.find()
       .populate({
         path: "payment",
-         select: "totalAmount totalPaid customer product",
+        select: "totalAmount totalPaid customer product",
         populate: [
           { path: "customer", select: "name" },
           { path: "product", select: "title _id" },
@@ -243,7 +259,7 @@ const paymentController = {
       const transactions = await Transaction.find({
         payment: { $in: paymentIds },
       })
-        .select("transactionDate paidAmount paymentMode")
+        .select("transactionDate paidAmount paymentMode receiptUrl")
         .populate("transactionRecordBy", "name role");
 
       if (!transactions || transactions.length === 0) {
@@ -305,93 +321,93 @@ const paymentController = {
     });
   }),
 
-updateTransaction: expressAsyncHandler(async (req, res) => {
-  const { newData } = req.body;
-  const transactId = req.params.id;
+  updateTransaction: expressAsyncHandler(async (req, res) => {
+    const { newData } = req.body;
+    const transactId = req.params.id;
 
-  if (!newData || !transactId) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid input data",
-    });
-  }
-
-  // Allow only specific fields to be updated
-  const allowedFields = ["paidAmount", "paymentMode", "transactionDate"];
-  const filteredData = {};
-
-  for (const key of allowedFields) {
-    if (newData[key] !== undefined) filteredData[key] = newData[key];
-  }
-
-  if (Object.keys(filteredData).length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: "No valid fields to update",
-    });
-  }
-
-  // 🔹 Update the Transaction
-  const updatedTransaction = await Transaction.findByIdAndUpdate(
-    transactId,
-    { $set: filteredData },
-    { new: true }
-  );
-
-  if (!updatedTransaction) {
-    return res.status(404).json({
-      success: false,
-      message: "Transaction not found",
-    });
-  }
-
-  // 🔹 Find the related Payment
-  const payment = await Payment.findById(updatedTransaction.payment)
-    .populate("customer")
-    .populate("product");
-
-  if (!payment) {
-    return res.status(404).json({
-      success: false,
-      message: "Payment not found",
-    });
-  }
-
-  // 🔹 Recalculate totalPaid from all transactions under this payment
-  const allTransactions = await Transaction.find({ payment: payment._id });
-  const totalPaid = allTransactions.reduce(
-    (sum, txn) => sum + (txn.paidAmount || 0),
-    0
-  );
-
-  // 🔹 Update Payment totalPaid and nextPaymentDate
-  payment.totalPaid = totalPaid;
-  payment.nextPaymentDate = newData.transactionDate || payment.nextPaymentDate;
-  await payment.save();
-
-  // 🔹 Update Customer Payment Status
-  const customer = await Customer.findById(payment.customer._id);
-  if (customer) {
-    let newStatus = "pending";
-
-    if (totalPaid >= payment.totalAmount) {
-      newStatus = "paid";
-    } else if (totalPaid > 0 && totalPaid < payment.totalAmount) {
-      newStatus = "partially paid";
+    if (!newData || !transactId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid input data",
+      });
     }
 
-    customer.payment = newStatus;
-    await customer.save();
-  }
+    // Allow only specific fields to be updated
+    const allowedFields = ["paidAmount", "paymentMode", "transactionDate"];
+    const filteredData = {};
 
-  return res.status(200).json({
-    success: true,
-    message: "Transaction updated successfully",
-    updatedTransaction,
-    updatedPayment: payment,
-    updatedCustomer: customer,
-  });
-}),
+    for (const key of allowedFields) {
+      if (newData[key] !== undefined) filteredData[key] = newData[key];
+    }
 
+    if (Object.keys(filteredData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid fields to update",
+      });
+    }
+
+    // 🔹 Update the Transaction
+    const updatedTransaction = await Transaction.findByIdAndUpdate(
+      transactId,
+      { $set: filteredData },
+      { new: true }
+    );
+
+    if (!updatedTransaction) {
+      return res.status(404).json({
+        success: false,
+        message: "Transaction not found",
+      });
+    }
+
+    // 🔹 Find the related Payment
+    const payment = await Payment.findById(updatedTransaction.payment)
+      .populate("customer")
+      .populate("product");
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found",
+      });
+    }
+
+    // 🔹 Recalculate totalPaid from all transactions under this payment
+    const allTransactions = await Transaction.find({ payment: payment._id });
+    const totalPaid = allTransactions.reduce(
+      (sum, txn) => sum + (txn.paidAmount || 0),
+      0
+    );
+
+    // 🔹 Update Payment totalPaid and nextPaymentDate
+    payment.totalPaid = totalPaid;
+    payment.nextPaymentDate =
+      newData.transactionDate || payment.nextPaymentDate;
+    await payment.save();
+
+    // 🔹 Update Customer Payment Status
+    const customer = await Customer.findById(payment.customer._id);
+    if (customer) {
+      let newStatus = "pending";
+
+      if (totalPaid >= payment.totalAmount) {
+        newStatus = "paid";
+      } else if (totalPaid > 0 && totalPaid < payment.totalAmount) {
+        newStatus = "partially paid";
+      }
+
+      customer.payment = newStatus;
+      await customer.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Transaction updated successfully",
+      updatedTransaction,
+      updatedPayment: payment,
+      updatedCustomer: customer,
+    });
+  }),
 };
 module.exports = paymentController;
