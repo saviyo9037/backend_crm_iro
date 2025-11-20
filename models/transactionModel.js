@@ -27,6 +27,10 @@ const transactionSchema = new mongoose.Schema(
       enum: ["cash", "card", "upi", "bank_transfer"],
       required: true,
     },
+  receiptUrl: {
+    type: String, // Cloudinary-hosted image URL
+    default: null,
+  },
   },
   { timestamps: true }
 );

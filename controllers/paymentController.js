@@ -8,6 +8,7 @@ const Payments = require("../models/PaymentSchemas");
 
 const paymentController = {
   AddPayment: expressAsyncHandler(async (req, res) => {
+    console.log("--- ADD PAYMENT CONTROLLER HIT ---");
     try {
       const {
         productId,
