@@ -1,6 +1,6 @@
 const asynchandler = require('express-async-handler');
 const Leadform = require('../../models/leadformModel');
-// const { settings } = require('../../routes');
+const { settings } = require('../../routes');
 const Setting = require('../../models/settingsModel');
 
 const leadFormFieldsSettingsController = {

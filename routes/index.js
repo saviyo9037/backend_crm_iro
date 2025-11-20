@@ -19,9 +19,6 @@ const productSettingsRouter = require('./settingsRoutes/productSettingsRouter');
 const paymentRouter = require('./paymentRouter');
 const permissionRouter = require('./permissionRouter');
 const gstSettingsRouter = require('./settingsRoutes/gstSettingsRouter');
-const followupRouter = require('./followupRouter');
-const remainderRouter = require('./remainderRouter');
-
 
 const router = express()
  
@@ -44,9 +41,7 @@ router.use('/paymentstatus',paymentstatusRouter)
 router.use('/product-setting',productSettingsRouter)
 router.use('/payment',paymentRouter);
 router.use("/permission",permissionRouter)
-router.use("/gst",gstSettingsRouter);
-router.use("/follow-up",followupRouter);
-router.use("/remainder",remainderRouter);
+router.use("/gst",gstSettingsRouter)
 
 
 module.exports = router;

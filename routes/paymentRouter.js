@@ -4,7 +4,6 @@ const paymentRouter = express.Router();
 
 paymentRouter.post("/addPayment",paymentController.AddPayment)
 paymentRouter.get("/get-details/:id",paymentController.getPayment);
-paymentRouter.get("/get-customerPayments/:id",paymentController.getCustomerPayments);
 paymentRouter.get("/get-detailsed",paymentController.getPayments);
 paymentRouter.get("/get-ProductDetails",paymentController.getProductPaymentDetails);
 paymentRouter.get("/get-product",paymentController.getProduct);

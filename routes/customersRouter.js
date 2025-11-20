@@ -12,7 +12,6 @@ customersRouter.put('/edit/:id',isAuth,customersController.edit)
 customersRouter.put('/update-active/:id',isAuth,customersController.update_active)
 customersRouter.put('/update-paymentstatus/:id',isAuth,customersController.update_paymentstatus)
 customersRouter.put('/update-status/:id',isAuth,customersController.update_status)
-customersRouter.put('/update-lastcontacted/:id', isAuth, customersController.updateLastContacted)
 customersRouter.get("/get-customer/:id",isAuth,customersController.getCustomer)
 
 module.exports = customersRouter
