@@ -392,18 +392,23 @@ const customersController = {
 
     res.status(200).json({ updatedActive });
   }),
+
   updateLastContacted: asynchandler(async (req, res) => {
     const { id } = req.params;
+    const { lastContacted } = req.body;
 
     const customer = await Customer.findById(id);
     if (!customer) {
       return res.status(400).json({ message: "Customer not found" });
     }
 
-    customer.lastContacted = new Date();
-    await customer.save();
+    const updatedCustomer = await Customer.findByIdAndUpdate(
+      id,
+      { lastContacted: new Date(lastContacted) },
+      { runValidators: true, new: true }
+    );
 
-    res.status(200).json({ message: "Last contacted date updated successfully", customer });
+    res.status(200).json({ updatedCustomer });
   }),
 };
 
