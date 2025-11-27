@@ -117,10 +117,6 @@ const leadsController = {
       assignedTo = adminId; // agent creating gets assigned to self
     }
 
-    //   if (roleCheck.role === "Agent") {
-    //   assignedTo = adminId; // Assign to the Agent who created it
-    // }
-
     const newLead = await User.create({
       name,
       email,
@@ -160,16 +156,7 @@ const leadsController = {
             isRead: false,
           });
         }
-        // if (creator.role !== "Admin") {
-        //   const admin = await User.findOne({ role: "Admin" });
-        //   if (admin) {
-        //     notificationRecipients.push({
-        //       user: admin._id,
-        //       title: "Lead_created",
-        //       message: `A new lead ${name} was created by staff.`,
-        //       isRead: false,
-        //     });
-        //   }
+
         // Agents assigned to this staff
         const agents = await User.find({ assignedTo: adminId, role: "Agent" });
         agents.forEach((agent) => {
@@ -191,7 +178,7 @@ const leadsController = {
   }),
 
   // ========= 3. ASSIGN / UNASSIGN LEAD =========
-
+  
   assign: asynchandler(async (req, res) => {
     const { id } = req.params;
     const { staffId, isAssigning } = req.body;
@@ -215,15 +202,11 @@ const leadsController = {
     } else if (currentUser.role === "Sub-Admin") {
       // Sub-Admin can only assign to Agents
       if (staffToAssign.role !== "Agent") {
-        return res
-          .status(403)
-          .json({ message: "Sub-Admin can only assign leads to Agents" });
+        return res.status(403).json({ message: "Sub-Admin can only assign leads to Agents" });
       }
     } else {
       // Other roles (e.g., Agent) cannot assign leads
-      return res
-        .status(403)
-        .json({ message: "You are not authorized to assign leads" });
+      return res.status(403).json({ message: "You are not authorized to assign leads" });
     }
 
     if (!isAssigning) {
@@ -293,12 +276,13 @@ const leadsController = {
     res.status(200).json({ assignedlead });
   }),
 
+
   // ========= 4. ADMIN LEADS LIST =========
   listLeadsAdmin: asynchandler(async (req, res) => {
     if (req.user.role !== "Admin") {
-      return res.status(403).json({
-        message: "Forbidden: Only Admin users can access this resource.",
-      });
+      return res
+        .status(403)
+        .json({ message: "Forbidden: Only Admin users can access this resource." });
     }
 
     const page = parseInt(req.query.page) || 1;
@@ -316,14 +300,9 @@ const leadsController = {
       endDate,
       sortBy,
       filterleads,
-      assignedTo,
     } = req.query;
 
     let query = { role: "user" };
-
-    if (assignedTo) {
-      query.assignedTo = new mongoose.Types.ObjectId(assignedTo);
-    }
 
     if (
       priority &&
@@ -422,9 +401,7 @@ const leadsController = {
         },
       },
       { $unwind: { path: "$createdByUser", preserveNullAndEmptyArrays: true } },
-      {
-        $unwind: { path: "$assignedToUser", preserveNullAndEmptyArrays: true },
-      },
+      { $unwind: { path: "$assignedToUser", preserveNullAndEmptyArrays: true } },
       { $unwind: { path: "$updatedByUser", preserveNullAndEmptyArrays: true } },
       {
         $unwind: {
@@ -479,7 +456,8 @@ const leadsController = {
       leads,
       leadforms,
       currentPage: req.query.noLimit === "true" ? 1 : page,
-      totalPages: req.query.noLimit === "true" ? 1 : Math.ceil(total / limit),
+      totalPages:
+        req.query.noLimit === "true" ? 1 : Math.ceil(total / limit),
       totalLeads: total,
     });
   }),
@@ -512,369 +490,132 @@ const leadsController = {
     res.status(200).json({ leadCounts });
   }),
 
+  // ========= 6. LEADS LIST (role-based: Admin / SubAdmin / Agent) =========
   list: asynchandler(async (req, res) => {
-    const { role, id } = req.user;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    const {
-      priority,
-      status,
-      assignedTo,
-      searchText,
-      date,
-      startDate,
-      endDate,
-      sortBy,
-      filterleads,
-    } = req.query;
-
-    let query = { role: "user" };
-
-    /** ---------------------------------------
-     *  ASSIGNED-TO FILTER PRIORITY (from File 2)
-     *  ----------------------------------------*/
-    if (assignedTo) {
-      query.assignedTo = new mongoose.Types.ObjectId(assignedTo);
-    } else {
+      const { role, id } = req.user;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
+  
+      // Extract filter parameters
+      const {
+        priority,
+        status,
+        assignedTo,
+        searchText,
+        date,
+        startDate,
+        endDate,
+        sortBy,
+        filterleads,
+      } = req.query;
+  
+      let query = { role: "user" };
+  
+      // Role-based query
       if (role === "Sub-Admin") {
-        const subAdmin = await User.findById(id).populate(
-          "assignedAgents",
-          "id"
-        );
-        const agentIds = subAdmin.assignedAgents.map((a) => a.id);
-
-        query.$or = [
-          { createdBy: id },
-          { assignedTo: id },
-          { createdBy: { $in: agentIds } },
-          { assignedTo: { $in: agentIds } },
-        ];
-      } else if (role === "Agent") {
-        query.$or = [{ createdBy: id }, { assignedTo: id }];
+        const subAdmin = await User.findById(id).populate('assignedAgents', 'id');
+        const agentIds = subAdmin.assignedAgents.map(agent => agent.id);
+        query = {
+          role: "user",
+          $or: [
+            { createdBy: id },
+            { assignedTo: id },
+            { createdBy: { $in: agentIds } },
+            { assignedTo: { $in: agentIds } },
+          ],
+        };
+      } else if(role === "Agent") {
+              query = { role: "user", $or: [{ createdBy: id }, { assignedTo: id }] };
+      } else { // Agent and other roles
+        query = { role: "user" };
       }
-      // Admin → No restriction
-    }
-
-    /** ---------------------------------------
-     *  FILTERS (same in both files)
-     *  ----------------------------------------*/
-
-    if (
-      priority &&
-      ["hot", "warm", "cold", "Not Assigned"].includes(priority)
-    ) {
-      query.priority = priority;
-    }
-
-    if (filterleads === "Assigned") {
-      query.assignedTo = { $exists: true, $ne: null };
-    } else if (filterleads === "Unassigned") {
-      query.assignedTo = { $exists: false };
-    }
-
-    if (searchText) {
-      query.name = { $regex: searchText, $options: "i" };
-    }
-
-    /** ---------------------------------------
-     *  DATE FILTERS (merged)
-     *  ----------------------------------------*/
-
-    if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (!isNaN(start) && !isNaN(end)) {
-        end.setHours(23, 59, 59, 999);
-        query.createdAt = { $gte: start, $lte: end };
+  
+      // Apply filters
+      if (
+        priority &&
+        ["hot", "warm", "cold", "Not Assigned"].includes(priority)
+      ) {
+        query.priority = priority;
       }
-    } else if (date === "today") {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: today,
-        $lt: new Date(today.getTime() + 86400000),
-      };
-    } else if (date === "yesterday") {
-      const y = new Date();
-      y.setDate(y.getDate() - 1);
-      y.setHours(0, 0, 0, 0);
-      query.createdAt = { $gte: y, $lt: new Date(y.getTime() + 86400000) };
-    } else if (date === "custom" && startDate) {
-      const cd = new Date(startDate);
-      cd.setHours(0, 0, 0, 0);
-      query.createdAt = { $gte: cd, $lt: new Date(cd.getTime() + 86400000) };
-    }
+      if (filterleads === "Assigned") {
+        query.assignedTo = { $exists: true, $ne: null };
+      } else if (filterleads === "Unassigned") {
+        query.assignedTo = { $exists: false };
+      }
+      if (searchText) {
+        query.name = { $regex: searchText, $options: "i" };
+      }
+      //............savio changed.....
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          end.setHours(23, 59, 59, 999);
+          query.createdAt = { $gte: start, $lte: end };
+        }
+      } else if (date === "today") {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        query.createdAt = {
+          $gte: today,
+          $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
+        };
+      } else if (date === "yesterday") {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setHours(0, 0, 0, 0);
+        query.createdAt = {
+          $gte: yesterday,
+          $lt: new Date(yesterday.getTime() + 24 * 60 * 60 * 1000),
+        };
+      } else if (date === "custom" && startDate) {
+        const customDate = new Date(startDate);
+        customDate.setHours(0, 0, 0, 0);
+        query.createdAt = {
+          $gte: customDate,
+          $lt: new Date(customDate.getTime() + 24 * 60 * 60 * 1000),
+        };
+      }
+  
+      // Sorting
+      let sort = { createdAt: -1 }; // Default sort by createdAt descending
+      if (sortBy === "ascleadvalue") {
+        sort = { leadvalue: 1 };
+      } else if (sortBy === "descleadvalue") {
+        sort = { leadvalue: -1 };
+      }
+  
+      const total = await User.countDocuments(query);
+      let leadsQuery = User.find(query)
+        .populate("createdBy", "name")
+        .populate("assignedLeads","name")
+        .populate("assignedTo", "name")
+        .populate("updatedBy", "name")
+        .populate("nextfollowupupdatedBy", "role name")
+        .populate("source")
+        .populate("userDetails.leadFormId", "name type options ")
+        .sort(sort);
+  
+      if (req.query.noLimit !== 'true') {
+        leadsQuery = leadsQuery.skip(skip).limit(limit);
+      }
 
-    /** ---------------------------------------
-     *  SORTING
-     *  ----------------------------------------*/
-    let sort = { createdAt: -1 };
-
-    if (sortBy === "ascleadvalue") sort = { leadvalue: 1 };
-    else if (sortBy === "descleadvalue") sort = { leadvalue: -1 };
-
-    /** ---------------------------------------
-     *  EXECUTE QUERY
-     *  ----------------------------------------*/
-    const total = await User.countDocuments(query);
-
-    let leadsQuery = User.find(query)
-      .populate("createdBy", "name")
-      .populate("assignedLeads", "name")
-      .populate("assignedTo", "name")
-      .populate("updatedBy", "name")
-      .populate("nextfollowupupdatedBy", "role name")
-      .populate("source")
-      .populate("userDetails.leadFormId", "name type options")
-      .sort(sort);
-
-    if (req.query.noLimit !== "true") {
-      leadsQuery = leadsQuery.skip(skip).limit(limit);
-    }
-
-    const leads = await leadsQuery;
-
-    const leadforms = await Leadform.find();
-
-    res.status(200).json({
-      leads,
-      leadforms,
-      currentPage: req.query.noLimit === "true" ? 1 : page,
-      totalPages: req.query.noLimit === "true" ? 1 : Math.ceil(total / limit),
-      totalLeads: total,
-    });
-  }),
-
-  //   // ========= 6. LEADS LIST (role-based: Admin / SubAdmin / Agent) =========
-  //   list: asynchandler(async (req, res) => {
-  //     const { role, id } = req.user;
-
-  //     const page = parseInt(req.query.page) || 1;
-  //     const limit =
-  //       req.query.noLimit === "true"
-  //         ? Number.MAX_SAFE_INTEGER
-  //         : parseInt(req.query.limit) || 10;
-  //     const skip = (page - 1) * limit;
-
-  //     const {
-  //       priority,
-  //       status,
-  //       assignedTo,
-  //       searchText,
-  //       date,
-  //       startDate,
-  //       endDate,
-  //       sortBy,
-  //       filterleads,
-  //     } = req.query;
-
-  //     let query = { role: "user" };
-
-  //     if (role === "Sub-Admin") {
-  //       const subAdmin = await User.findById(id).populate(
-  //         "assignedAgents",
-  //         "id"
-  //       );
-  //       const agentIds = (subAdmin?.assignedAgents || []).map((a) => a.id);
-
-  //       query.$or = [
-  //         { createdBy: new mongoose.Types.ObjectId(id) },
-  //         { assignedTo: new mongoose.Types.ObjectId(id) },
-  //         {
-  //           createdBy: {
-  //             $in: agentIds.map((aid) => new mongoose.Types.ObjectId(aid)),
-  //           },
-  //         },
-  //         {
-  //           assignedTo: {
-  //             $in: agentIds.map((aid) => new mongoose.Types.ObjectId(aid)),
-  //           },
-  //         },
-  //       ];
-  //     } else if (role === "Agent") {
-  //       query.$or = [
-  //         { createdBy: new mongoose.Types.ObjectId(id) },
-  //         { assignedTo: new mongoose.Types.ObjectId(id) },
-  //       ];
-  //     }
-
-  //     if (priority && ["hot", "warm", "cold", "Not Assigned"].includes(priority)) {
-  //       query.priority = priority;
-  //     }
-
-  // if (filterleads === "Assigned")
-  //     filters.assignedTo = { $exists: true, $ne: null };
-  // else if (filterleads === "Unassigned")
-  //     filters.assignedTo = { $exists: false };
-
-  //     if (searchText) {
-  //       query.$or = [
-  //         { name: { $regex: searchText, $options: "i" } },
-  //         { mobile: { $regex: searchText, $options: "i" } },
-  //       ];
-  //     }
-
-  //     if (status && ["open", "converted", "rejected"].includes(status)) {
-  //       query.status = status;
-  //     }
-
-  //     // Date filters
-  //     if (startDate && endDate) {
-  //       const start = new Date(startDate);
-  //       const endD = new Date(endDate);
-  //       if (!isNaN(start) && !isNaN(endD)) {
-  //         endD.setHours(23, 59, 59, 999);
-  //         query.createdAt = { $gte: start, $lte: endD };
-  //       }
-  //     } else if (date === "today") {
-  //       const today = new Date();
-  //       today.setHours(0, 0, 0, 0);
-  //       query.createdAt = {
-  //         $gte: today,
-  //         $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000),
-  //       };
-  //     } else if (date === "yesterday") {
-  //       const y = new Date();
-  //       y.setDate(y.getDate() - 1);
-  //       y.setHours(0, 0, 0, 0);
-  //       query.createdAt = {
-  //         $gte: y,
-  //         $lt: new Date(y.getTime() + 24 * 60 * 60 * 1000),
-  //       };
-  //     } else if (date === "custom" && startDate) {
-  //       const c = new Date(startDate);
-  //       c.setHours(0, 0, 0, 0);
-  //       query.createdAt = {
-  //         $gte: c,
-  //         $lt: new Date(c.getTime() + 24 * 60 * 60 * 1000),
-  //       };
-  //     }
-
-  //     let sort = { createdAt: -1 };
-  //     if (sortBy === "ascleadvalue") sort = { leadvalue: 1 };
-  //     else if (sortBy === "descleadvalue") sort = { leadvalue: -1 };
-
-  //     const total = await User.countDocuments(query);
-
-  //     const aggregationPipeline = [
-  //       { $match: query },
-  //       { $sort: sort },
-  //       { $skip: skip },
-  //       { $limit: limit },
-  //       {
-  //         $lookup: {
-  //           from: "users",
-  //           localField: "createdBy",
-  //           foreignField: "_id",
-  //           as: "createdByUser",
-  //         },
-  //       },
-  //       {
-  //         $lookup: {
-  //           from: "users",
-  //           localField: "assignedTo",
-  //           foreignField: "_id",
-  //           as: "assignedToUser",
-  //         },
-  //       },
-  //       {
-  //         $lookup: {
-  //           from: "users",
-  //           localField: "updatedBy",
-  //           foreignField: "_id",
-  //           as: "updatedByUser",
-  //         },
-  //       },
-  //       {
-  //         $lookup: {
-  //           from: "users",
-  //           localField: "nextfollowupupdatedBy",
-  //           foreignField: "_id",
-  //           as: "nextfollowupupdatedByUser",
-  //         },
-  //       },
-  //       {
-  //         $lookup: {
-  //           from: "settings",
-  //           localField: "source",
-  //           foreignField: "_id",
-  //           as: "sourceDetails",
-  //         },
-  //       },
-  //       { $unwind: { path: "$createdByUser", preserveNullAndEmptyArrays: true } },
-  //       { $unwind: { path: "$assignedToUser", preserveNullAndEmptyArrays: true } },
-  //       { $unwind: { path: "$updatedByUser", preserveNullAndEmptyArrays: true } },
-  //       {
-  //         $unwind: {
-  //           path: "$nextfollowupupdatedByUser",
-  //           preserveNullAndEmptyArrays: true,
-  //         },
-  //       },
-  //       { $unwind: { path: "$sourceDetails", preserveNullAndEmptyArrays: true } },
-  //       {
-  //         $project: {
-  //           name: 1,
-  //           email: 1,
-  //           mobile: 1,
-  //           location: 1,
-  //           interestedproduct: 1,
-  //           leadvalue: 1,
-  //           role: 1,
-  //           status: 1,
-  //           whatsapp: 1,
-  //           createdAt: 1,
-  //           updatedAt: 1,
-  //           priority: 1,
-  //           nextFollowUp: 1,
-  //           createdBy: {
-  //             _id: "$createdByUser._id",
-  //             name: "$createdByUser.name",
-  //           },
-  //           assignedTo: {
-  //             _id: "$assignedToUser._id",
-  //             name: "$assignedToUser.name",
-  //             role: "$assignedToUser.role",
-  //           },
-  //           updatedBy: {
-  //             _id: "$updatedByUser._id",
-  //             name: "$updatedByUser.name",
-  //           },
-  //           nextfollowupupdatedBy: {
-  //             _id: "$nextfollowupupdatedByUser._id",
-  //             role: "$nextfollowupupdatedByUser.role",
-  //             name: "$nextfollowupupdatedByUser.name",
-  //           },
-  //           source: "$sourceDetails",
-  //           userDetails: 1,
-  //         },
-  //       },
-  //     ];
-
-  //     const leads = await User.aggregate(aggregationPipeline);
-  //     console.log(leads,"hjgjgfj")
-
-  //     let agentSubAdminDetails = null;
-  //     if (role === "Agent") {
-  //       const agent = await User.findById(id)
-  //         .populate("assignedTo", "name role email mobile")
-  //         .select("assignedTo");
-  //       agentSubAdminDetails = agent?.assignedTo || null;
-  //     }
-
-  //     const leadforms = await Leadform.find();
-
-  //     res.status(200).json({
-  //       leads,
-  //       leadforms,
-  //       subAdmin: agentSubAdminDetails,
-  //       currentPage: req.query.noLimit === "true" ? 1 : page,
-  //       totalPages:
-  //         req.query.noLimit === "true" ? 1 : Math.ceil(total / limit),
-  //       totalLeads: total,
-  //     });
-  //   }),
+      const interestedproduct = await Setting.findOne(leadsQuery.interestedproduct);
+  
+      const leads = await leadsQuery;
+  
+      const leadforms = await Leadform.find();
+  
+      res.status(200).json({
+        leads,
+        leadforms,
+        currentPage: req.query.noLimit === 'true' ? 1 : page,
+        totalPages: req.query.noLimit === 'true' ? 1 : Math.ceil(total / limit),
+        totalLeads: total,
+      });
+    }),
+  
 
   // ========= 7. UPDATE LEAD STATUS (with transaction) =========
   update_status: asynchandler(async (req, res) => {
@@ -930,7 +671,9 @@ const leadsController = {
           session
         );
         if (customerExists) {
-          await Customer.findByIdAndDelete(customerExists._id).session(session);
+          await Customer.findByIdAndDelete(customerExists._id).session(
+            session
+          );
         }
       }
 
@@ -1452,7 +1195,9 @@ const leadsController = {
         try {
           const createdByUser = await User.findById(userID);
           if (!createdByUser) {
-            return res.status(404).json({ message: "Creator user not found" });
+            return res
+              .status(404)
+              .json({ message: "Creator user not found" });
           }
 
           const processedLeads = [];
@@ -1576,7 +1321,8 @@ const leadsController = {
         } catch (err) {
           console.error(err);
           res.status(500).json({
-            message: "Error uploading leads. Ensure mobile numbers are unique.",
+            message:
+              "Error uploading leads. Ensure mobile numbers are unique.",
           });
         }
       });

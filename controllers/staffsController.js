@@ -74,37 +74,98 @@ const staffsController = {
 
     res.status(200).json({ staff });
   }),
+delete_staffs : asynchandler(async (req, res) => {
+  if (req.user.role !== "Admin") {
+    return res
+      .status(403)
+      .json({ message: "Forbidden: Only Admin users can delete staff." });
+  }
 
-  delete_staffs: asynchandler(async (req, res) => {
-    if (req.user.role !== "Admin") {
+  const { id } = req.params;      // staff to delete
+  const { newUserId } = req.body; // new Sub-Admin or new Agent
+
+  if (!id) {
+    return res.status(400).json({ message: "User id is required" });
+  }
+  if (!newUserId) {
+    return res.status(400).json({ message: "newUserId is required" });
+  }
+
+  const deletingUser = await User.findById(id);
+  if (!deletingUser) {
+    return res.status(400).json({ message: "User does not exist" });
+  }
+
+  const newUser = await User.findById(newUserId);
+  if (!newUser) {
+    return res.status(400).json({ message: "New user does not exist" });
+  }
+
+  // ---------------------------------------------
+  // CASE 1: DELETING A SUB-ADMIN → MOVE AGENTS
+  // ---------------------------------------------
+  if (deletingUser.role === "Sub-Admin") {
+    // Safety: newUser must also be Sub-Admin
+    if (newUser.role !== "Sub-Admin") {
       return res
-        .status(403)
-        .json({ message: "Forbidden: Only Admin users can delete staff." });
-    }
-    const { id } = req.params;
-    const {newAgentId}=req.body
-    if (!id) {
-      return res.status(400).json({ message: "User id is required" });
-    }
-    if(!newAgentId){
-      return res.status(400).json({message:"NewAgentId is Required"})
+        .status(400)
+        .json({ message: "New user must be a Sub-Admin when deleting a Sub-Admin" });
     }
 
-    const theMember = await User.findById(id);
-    if (!theMember) {
-      return res.status(400).json({ message: "User does not exist" });
-    }
-const newAgent = await User.findById(newAgentId);
-    if (!newAgent) {
-      return res.status(400).json({ message: "New agent does not exist" });
+    // ✅ This is the critical part:
+    // We assume agents under this Sub-Admin are stored in deletingUser.assignedAgents
+    const agentsUnderSubAdmin = deletingUser.assignedAgents || [];
+
+    // 1) Reassign those agents' assignedTo to the new SubAdmin
+    if (agentsUnderSubAdmin.length > 0) {
+      await User.updateMany(
+        { _id: { $in: agentsUnderSubAdmin }, role: "Agent" },
+        { $set: { assignedTo: newUserId } }
+      );
+
+      // 2) Add these agents into the new SubAdmin.assignedAgents array
+      await User.findByIdAndUpdate(
+        newUserId,
+        { $addToSet: { assignedAgents: { $each: agentsUnderSubAdmin } } },
+        { new: true }
+      );
     }
 
-    // Reassign leads to the new agent
-    await User.updateMany({ assignedTo: id }, { $set: { assignedTo: newAgentId } });
-    await User.findByIdAndDelete(id);
-    res.status(200).json({ message: "User deleted successfully" });
-  }),
+    // 3) Optionally: reassign leads directly assigned to this SubAdmin
+    await User.updateMany(
+      { assignedTo: id, role: "user" },
+      { $set: { assignedTo: newUserId } }
+    );
+  }
 
+  // ---------------------------------------------
+  // CASE 2: DELETING AN AGENT → MOVE LEADS
+  // ---------------------------------------------
+  if (deletingUser.role === "Agent") {
+    // Safety: newUser should be Agent or Sub-Admin (you choose).
+    // Here, we allow both.
+    await User.updateMany(
+      { assignedTo: id, role: "user" },
+      { $set: { assignedTo: newUserId } }
+    );
+
+    // If you also maintain assignedLeads on staff, move them:
+    await User.findByIdAndUpdate(
+      newUserId,
+      { $addToSet: { assignedLeads: { $each: deletingUser.assignedLeads || [] } } },
+      { new: true }
+    );
+  }
+
+  // ---------------------------------------------
+  // FINALLY DELETE THE STAFF
+  // ---------------------------------------------
+  await User.findByIdAndDelete(id);
+
+  return res.status(200).json({
+    message: `${deletingUser.role} deleted successfully and reassigned where needed`,
+  });
+}),
 get_staffs: asynchandler(async (req, res) => {
 
   // Fetch all Sub-Admins + Agents

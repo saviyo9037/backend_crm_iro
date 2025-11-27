@@ -147,22 +147,25 @@ const customersController = {
   }),
 
   list: asynchandler(async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
 
-    const {
-      paymentStatus,
-      activestatus,
-      searchText,
-      date,
-      startDate,
-      endDate,
-    } = req.query;
+  const {
+    paymentStatus,
+    activestatus,
+    searchText,
+    date,
+    startDate,
+    endDate,
+    assignedTo,
+  } = req.query;
 
-    let query = {};
+  let query = {};
   const { role, id } = req.user;
-if (role === "Admin") {
+
+  // ===== ROLE BASED VISIBILITY =====
+  if (role === "Admin") {
     // Admin → Can view all customers
     query = {};
   } 
@@ -192,100 +195,92 @@ if (role === "Admin") {
 
   // ===== FILTERS =====
 
+  // Payment Status filter
+  if (paymentStatus && ["pending", "partially paid", "paid", "unpaid"].includes(paymentStatus)) {
+    query.payment = paymentStatus;
+  }
 
-    if (
-      paymentStatus &&
-      ["pending", "partially paid", "paid", "unpaid"].includes(paymentStatus)
-    ) {
-      query.payment = paymentStatus;
+  // Active/Inactive filter
+  if (activestatus && ["Active", "Inactive"].includes(activestatus)) {
+    query.isActive = activestatus === "Active";
+  }
+
+  // Search filter
+  if (searchText) {
+    query.$or = [
+      { name: { $regex: searchText, $options: "i" } },
+      { mobile: { $regex: searchText, $options: "i" } },
+      { email: { $regex: searchText, $options: "i" } },
+    ];
+  }
+
+  // Date filters
+  if (date === "today") {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    query.createdAt = { $gte: today, $lt: new Date(today.getTime() + 86400000) };
+  } else if (date === "yesterday") {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    query.createdAt = { $gte: yesterday, $lt: new Date(yesterday.getTime() + 86400000) };
+  } else if (date === "custom" && startDate) {
+    const custom = new Date(startDate);
+    custom.setHours(0, 0, 0, 0);
+    query.createdAt = { $gte: custom, $lt: new Date(custom.getTime() + 86400000) };
+  } else if (date === "range" && startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      end.setHours(23, 59, 59, 999);
+      query.createdAt = { $gte: start, $lte: end };
     }
+  }
 
-    if (activestatus && ["Active", "Inactive"].includes(activestatus)) {
-      query.isActive = activestatus === "Active" ? true : false;
-    }
+  // ===== PAGINATION + POPULATION =====
+  const total = await Customer.countDocuments(query);
 
-    if (searchText) {
-      query.$or = [
-        { name: { $regex: searchText, $options: "i" } },
-        { mobile: { $regex: searchText, $options: "i" } },
-        { email: { $regex: searchText, $options: "i" } },
-      ];
-    }
+  const customers = await Customer.find(query)
+    .populate("createdBy", "name role")
+    .populate({
+      path: "leadId",
+      select: "status userDetails leadvalue source",
+      populate: { path: "source", select: "title" },
+    })
+    .populate("status", "title")
+    .populate("assignedTo", "name role")
+    .skip(skip)
+    .limit(limit)
+    .sort({ createdAt: -1 })
+    .lean();
 
-    if (date === "today") {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: today,
-        $lt: new Date(today.getTime() + 86400000),
-      };
-    } else if (date === "yesterday") {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      yesterday.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: yesterday,
-        $lt: new Date(yesterday.getTime() + 86400000),
-      };
-    } else if (date === "custom" && startDate) {
-      const custom = new Date(startDate);
-      custom.setHours(0, 0, 0, 0);
-      query.createdAt = {
-        $gte: custom,
-        $lt: new Date(custom.getTime() + 86400000),
-      };
-    } else if (date === "range" && startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        query.createdAt = { $gte: start, $lte: end };
-      }
-    }
-
-    const total = await Customer.countDocuments(query);
-
-    const convertedcustomers = await Customer.find(query)
-      .populate("createdBy", "name")
-      .populate({
-        path: "leadId",
-        select: "status userDetails leadvalue source",
-        populate: {
-          path: "source",
-          select: "title",
-        },
-      })
-      .populate("status", "title")
-      .skip(skip)
-      .limit(limit)
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.status(200).json({
-      customers: convertedcustomers,
-      currentPage: page,
-      totalPages: Math.ceil(total / limit),
-      totalCustomers: total,
-    });
-  }),
+  res.status(200).json({
+    customers,
+    currentPage: page,
+    totalPages: Math.ceil(total / limit),
+    totalCustomers: total,
+  });
+}),
 
   getCustomer: asynchandler(async (req, res) => {
     const { id } = req.params;
     const getCustomer = await Customer.find({ product: id });
     if (!getCustomer) {
       return res.status(404).send("customer not found");
-    }
- const role = getCustomer.createdBy
+    } 
+    const role = getCustomer.createdBy
     if(role ==="Admin"){
 
     }else {
 
     }
+
     return res.status(200).json({
       message: "Customer",
       getCustomer,
     });
   }),
+
 
   delete: asynchandler(async (req, res) => {
     const { id } = req.params;
